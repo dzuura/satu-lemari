@@ -4,11 +4,13 @@ import (
 	"log"
 	"net/http"
 
-	"github.com/dzuura/satu-lemari/domain/auth"
-	"github.com/dzuura/satu-lemari/domain/config"
-	"github.com/dzuura/satu-lemari/domain/item"
 	"github.com/gorilla/mux"
 	"github.com/joho/godotenv"
+	"github.com/dzuura/satu-lemari/domain/config"
+	"github.com/dzuura/satu-lemari/domain/auth"
+	"github.com/dzuura/satu-lemari/domain/item"
+	"github.com/dzuura/satu-lemari/domain/queue"
+	// "github.com/dzuura/satu-lemari/domain/notification"
 )
 
 func main() {
@@ -24,17 +26,16 @@ func main() {
 	// Initialize router
 	r := mux.NewRouter()
 
-	// Initialize authentication service
+	// Initialize services
 	authService := auth.NewAuthService(cfg)
-
-	// Initialize item service
 	itemService := item.NewItemService(cfg)
+	queueService := queue.NewQueueService(cfg)
+	// notificationService := notification.NewNotificationService(cfg)
 
-	// Register authentication routes
+	// Register routes
 	authService.RegisterRoutes(r)
-
-	// Register item routes
 	itemService.RegisterRoutes(r)
+	queueService.RegisterRoutes(r)
 
 	// Health check
 	r.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {

@@ -8,13 +8,13 @@ import (
 )
 
 type Config struct {
-	Port            string
-	FirebaseProjectID string
-	FirebasePrivateKey string
+	Port                string
+	FirebaseProjectID   string
+	FirebasePrivateKey  string
 	FirebaseClientEmail string
-	SupabaseURL     string
-	SupabaseKey     string
-	RedisURL        string
+	SupabaseURL         string
+	SupabaseKey         string
+	RedisURL            string
 }
 
 func LoadConfig() *Config {
@@ -24,12 +24,12 @@ func LoadConfig() *Config {
 	}
 
 	return &Config{
-		Port:            os.Getenv("PORT"),
-		FirebaseProjectID: os.Getenv("FIREBASE_PROJECT_ID"),
-		FirebasePrivateKey: os.Getenv("FIREBASE_PRIVATE_KEY"),
+		Port:                os.Getenv("PORT"),
+		FirebaseProjectID:   os.Getenv("FIREBASE_PROJECT_ID"),
+		FirebasePrivateKey:  os.Getenv("FIREBASE_PRIVATE_KEY"),
 		FirebaseClientEmail: os.Getenv("FIREBASE_CLIENT_EMAIL"),
-		SupabaseURL:     os.Getenv("SUPABASE_URL"),
-		SupabaseKey:     os.Getenv("SUPABASE_KEY"),
-		RedisURL:        os.Getenv("REDIS_URL"),
+		SupabaseURL:         os.Getenv("SUPABASE_URL"),
+		SupabaseKey:         os.Getenv("SUPABASE_KEY"),
+		RedisURL:            os.Getenv("REDIS_URL"),
 	}
 }
