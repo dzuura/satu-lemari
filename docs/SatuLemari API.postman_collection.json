@@ -1,0 +1,990 @@
+{
+	"info": {
+		"_postman_id": "b84ceb57-0da5-479c-aef6-37035865491f",
+		"name": "SatuLemari API",
+		"description": "Complete API collection for SatuLemari - Donation and Rental Clothing Platform",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+		"_exporter_id": "39730752",
+		"_collection_link": "https://potabot-team.postman.co/workspace/My-Workspace~74033166-246a-4e69-8123-217484a3ea9a/collection/39730752-b84ceb57-0da5-479c-aef6-37035865491f?action=share&source=collection_link&creator=39730752"
+	},
+	"item": [
+		{
+			"name": "Authentication",
+			"item": [
+				{
+					"name": "Verify Auth Token",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"token\": \"{{firebase_id_token}}\",\n  \"type\": \"firebase\",\n  \"platform\": \"web\",\n  \"username\": \"partner_user\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/auth/verify",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"auth",
+								"verify"
+							]
+						},
+						"description": "Verify Firebase ID token and get access token for API usage"
+					},
+					"response": []
+				},
+				{
+					"name": "Google Auth Verify",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"token\": \"{{google_id_token}}\",\n  \"type\": \"google\",\n  \"platform\": \"mobile\",\n  \"username\": \"mobile_user\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/auth/verify",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"auth",
+								"verify"
+							]
+						},
+						"description": "Verify Google ID token and get access token"
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Users",
+			"item": [
+				{
+					"name": "Get User Profile",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{access_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/users/me",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"users",
+								"me"
+							]
+						},
+						"description": "Get current user profile information"
+					},
+					"response": []
+				},
+				{
+					"name": "Update User Profile",
+					"request": {
+						"method": "PUT",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{access_token}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"full_name\": \"John Doe\",\n  \"phone\": \"6281234567890\",\n  \"address\": \"Jl. Merdeka No. 123\",\n  \"city\": \"Jakarta\",\n  \"description\": \"Passionate about sustainable fashion\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/users/me",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"users",
+								"me"
+							]
+						},
+						"description": "Update user profile information"
+					},
+					"response": []
+				},
+				{
+					"name": "Update User Location",
+					"request": {
+						"method": "PUT",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{access_token}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"latitude\": -6.2088,\n  \"longitude\": 106.8456,\n  \"address\": \"Jl. Thamrin No. 1\",\n  \"city\": \"Jakarta Pusat\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/users/me/location",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"users",
+								"me",
+								"location"
+							]
+						},
+						"description": "Update user location coordinates"
+					},
+					"response": []
+				},
+				{
+					"name": "Get User Dashboard",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{access_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/users/dashboard",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"users",
+								"dashboard"
+							]
+						},
+						"description": "Get user dashboard data with stats and recent activities"
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Categories",
+			"item": [
+				{
+					"name": "Get All Categories",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/categories",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"categories"
+							]
+						},
+						"description": "Get list of all clothing categories"
+					},
+					"response": []
+				},
+				{
+					"name": "Get Category by ID",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/categories/{{category_id}}",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"categories",
+								"{{category_id}}"
+							]
+						},
+						"description": "Get specific category details"
+					},
+					"response": []
+				},
+				{
+					"name": "Create Category (Admin)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{access_token}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"name\": \"Evening Wear\",\n  \"description\": \"Elegant clothing for evening events\",\n  \"icon\": \"evening\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/categories",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"categories"
+							]
+						},
+						"description": "Create new clothing category (admin only)"
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Items",
+			"item": [
+				{
+					"name": "Get All Items",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/items?page=1&limit=10&type=donation&category_id={{category_id}}",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"items"
+							],
+							"query": [
+								{
+									"key": "page",
+									"value": "1"
+								},
+								{
+									"key": "limit",
+									"value": "10"
+								},
+								{
+									"key": "type",
+									"value": "donation"
+								},
+								{
+									"key": "category_id",
+									"value": "{{category_id}}"
+								}
+							]
+						},
+						"description": "Get list of items with filtering and pagination"
+					},
+					"response": []
+				},
+				{
+					"name": "Get Item by ID",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/items/{{item_id}}",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"items",
+								"{{item_id}}"
+							]
+						},
+						"description": "Get specific item details"
+					},
+					"response": []
+				},
+				{
+					"name": "Create Item (Partner)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{access_token}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"category_id\": \"{{category_id}}\",\n  \"name\": \"Long Sleeve Stretch Shirt\",\n  \"description\": \"Professional shirt perfect for business meetings\",\n  \"size\": \"M\",\n  \"color\": \"Navy Blue\",\n  \"type\": \"rental\",\n  \"price\": 50000,\n  \"total_quantity\": 3,\n  \"condition\": \"excellent\",\n  \"images\": [\"https://example.com/shirt1.jpg\", \"https://example.com/shirt2.jpg\"]\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/items",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"items"
+							]
+						},
+						"description": "Create new clothing item (partner only)"
+					},
+					"response": []
+				},
+				{
+					"name": "Update Item (Partner)",
+					"request": {
+						"method": "PUT",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{access_token}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"name\": \"Long Sleeve Stretch Shirt - Updated\",\n  \"price\": 45000,\n  \"total_quantity\": 5,\n  \"status\": \"active\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/items/{{item_id}}",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"items",
+								"{{item_id}}"
+							]
+						},
+						"description": "Update item details (partner only)"
+					},
+					"response": []
+				},
+				{
+					"name": "Delete Item (Partner)",
+					"request": {
+						"method": "DELETE",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{access_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/items/{{item_id}}",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"items",
+								"{{item_id}}"
+							]
+						},
+						"description": "Delete item (partner only)"
+					},
+					"response": []
+				},
+				{
+					"name": "Search Items",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/items/search?q=shirt&size=M&color=blue&min_price=0&max_price=100000",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"items",
+								"search"
+							],
+							"query": [
+								{
+									"key": "q",
+									"value": "shirt"
+								},
+								{
+									"key": "size",
+									"value": "M"
+								},
+								{
+									"key": "color",
+									"value": "blue"
+								},
+								{
+									"key": "min_price",
+									"value": "0"
+								},
+								{
+									"key": "max_price",
+									"value": "100000"
+								}
+							]
+						},
+						"description": "Search items with various filters"
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Requests",
+			"item": [
+				{
+					"name": "Create Request",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{access_token}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"item_id\": \"{{item_id}}\",\n  \"quantity\": 1,\n  \"reason\": \"I need it for a job interview\",\n  \"contact_info\": \"6281234567890\",\n  \"pickup_date\": \"2024-01-15T10:00:00Z\",\n  \"return_date\": \"2024-01-20T18:00:00Z\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/requests",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"requests"
+							]
+						},
+						"description": "Create new donation or rental request"
+					},
+					"response": []
+				},
+				{
+					"name": "Get My Requests",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{access_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/requests/my?page=1&limit=10&type=donation&status=pending",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"requests",
+								"my"
+							],
+							"query": [
+								{
+									"key": "page",
+									"value": "1"
+								},
+								{
+									"key": "limit",
+									"value": "10"
+								},
+								{
+									"key": "type",
+									"value": "donation"
+								},
+								{
+									"key": "status",
+									"value": "pending"
+								}
+							]
+						},
+						"description": "Get current user's requests with filtering"
+					},
+					"response": []
+				},
+				{
+					"name": "Get Partner Requests",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{access_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/requests/partner?page=1&limit=10&status=pending",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"requests",
+								"partner"
+							],
+							"query": [
+								{
+									"key": "page",
+									"value": "1"
+								},
+								{
+									"key": "limit",
+									"value": "10"
+								},
+								{
+									"key": "status",
+									"value": "pending"
+								}
+							]
+						},
+						"description": "Get requests for partner's items (partner only)"
+					},
+					"response": []
+				},
+				{
+					"name": "Get Request by ID",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{access_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/requests/{{request_id}}",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"requests",
+								"{{request_id}}"
+							]
+						},
+						"description": "Get specific request details"
+					},
+					"response": []
+				},
+				{
+					"name": "Approve Request (Partner)",
+					"request": {
+						"method": "PUT",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{access_token}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"status\": \"approved\",\n  \"pickup_date\": \"2024-01-15T10:00:00Z\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/requests/{{request_id}}",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"requests",
+								"{{request_id}}"
+							]
+						},
+						"description": "Approve request (partner only)"
+					},
+					"response": []
+				},
+				{
+					"name": "Reject Request (Partner)",
+					"request": {
+						"method": "PUT",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{access_token}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"status\": \"rejected\",\n  \"rejection_reason\": \"Item not available at requested time\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/requests/{{request_id}}",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"requests",
+								"{{request_id}}"
+							]
+						},
+						"description": "Reject request with reason (partner only)"
+					},
+					"response": []
+				},
+				{
+					"name": "Complete Request",
+					"request": {
+						"method": "PUT",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{access_token}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"status\": \"completed\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/requests/{{request_id}}",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"requests",
+								"{{request_id}}"
+							]
+						},
+						"description": "Mark request as completed"
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Notifications",
+			"item": [
+				{
+					"name": "Get My Notifications",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{access_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/notifications?page=1&limit=20&is_read=false",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"notifications"
+							],
+							"query": [
+								{
+									"key": "page",
+									"value": "1"
+								},
+								{
+									"key": "limit",
+									"value": "20"
+								},
+								{
+									"key": "is_read",
+									"value": "false"
+								}
+							]
+						},
+						"description": "Get user notifications with filtering"
+					},
+					"response": []
+				},
+				{
+					"name": "Mark Notifications as Read",
+					"request": {
+						"method": "PUT",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{access_token}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"notification_ids\": [\"{{notification_id_1}}\", \"{{notification_id_2}}\"]\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/notifications/mark-read",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"notifications",
+								"mark-read"
+							]
+						},
+						"description": "Mark multiple notifications as read"
+					},
+					"response": []
+				},
+				{
+					"name": "Get Notification Stats",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{access_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/notifications/stats",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"notifications",
+								"stats"
+							]
+						},
+						"description": "Get notification statistics"
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "AI Services",
+			"item": [
+				{
+					"name": "AI Item Analysis",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{access_token}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"image_url\": \"https://example.com/clothing-image.jpg\",\n  \"item_type\": \"shirt\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/ai/analyze-item",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"ai",
+								"analyze-item"
+							]
+						},
+						"description": "Analyze clothing item using AI to detect category, color, size"
+					},
+					"response": []
+				},
+				{
+					"name": "AI Search Intent",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{access_token}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"query\": \"Saya cari outfit untuk interview kerja, ukuran M, warna netral\",\n  \"context\": \"search\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/ai/search-intent",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"ai",
+								"search-intent"
+							]
+						},
+						"description": "Parse user search intent using AI"
+					},
+					"response": []
+				},
+				{
+					"name": "Get Recommendations",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{access_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/ai/recommendations?limit=10&type=donation",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"ai",
+								"recommendations"
+							],
+							"query": [
+								{
+									"key": "limit",
+									"value": "10"
+								},
+								{
+									"key": "type",
+									"value": "donation"
+								}
+							]
+						},
+						"description": "Get AI-based item recommendations for user"
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "System",
+			"item": [
+				{
+					"name": "Health Check",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/health",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"health"
+							]
+						},
+						"description": "Check API server health status"
+					},
+					"response": []
+				},
+				{
+					"name": "API Stats (Admin)",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{access_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/admin/stats",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"admin",
+								"stats"
+							]
+						},
+						"description": "Get API statistics (admin only)"
+					},
+					"response": []
+				}
+			]
+		}
+	],
+	"auth": {
+		"type": "bearer",
+		"bearer": [
+			{
+				"key": "token",
+				"value": "{{access_token}}",
+				"type": "string"
+			}
+		]
+	},
+	"variable": [
+		{
+			"key": "base_url",
+			"value": "http://localhost:8080",
+			"type": "string"
+		},
+		{
+			"key": "access_token",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "user_id",
+			"value": "",
+			"type": "string"
+		}
+	]
+}
