@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"log"
 	"net/http"
 	"os"
@@ -12,33 +13,57 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/rs/cors"
 
+	"github.com/dzuura/satu-lemari/domain/ai"
 	"github.com/dzuura/satu-lemari/domain/auth"
+	"github.com/dzuura/satu-lemari/domain/cache"
 	"github.com/dzuura/satu-lemari/domain/category"
 	"github.com/dzuura/satu-lemari/domain/config"
+	"github.com/dzuura/satu-lemari/domain/database"
 	"github.com/dzuura/satu-lemari/domain/item"
+	"github.com/dzuura/satu-lemari/domain/logging"
 	"github.com/dzuura/satu-lemari/domain/middleware"
+	"github.com/dzuura/satu-lemari/domain/security"
 	"github.com/dzuura/satu-lemari/domain/user"
 )
 
 type Server struct {
-	config      *config.Config
-	authService *auth.AuthService
-	userService *user.UserService
+	config          *config.Config
+	authService     *auth.AuthService
+	userService     *user.UserService
 	categoryService *category.CategoryService
-	itemService *item.ItemService
-	router      *mux.Router
-	httpServer  *http.Server
+	itemService     *item.ItemService
+	aiService       *ai.AIServiceManager
+	aiHandler       *ai.AIServiceHandler
+	db              *database.Database
+	cache           *cache.RedisCache
+	router          *mux.Router
+	httpServer      *http.Server
+	logger          *logging.Logger
+	passwordHasher  *security.PasswordHasher
 }
 
 func main() {
 	// Load configuration
-	cfg, err := config.LoadConfig()
-	if err != nil {
-		log.Fatalf("Failed to load config: %v", err)
-	}
+	cfg := config.LoadConfig()
+
+	// Initialize logging
+	logging.InitLogger(cfg.LogLevel, cfg.LogFormat)
+	logger := logging.GetLogger()
+	logger.Info("Starting SatuLemari backend server", map[string]interface{}{
+		"port":      cfg.Port,
+		"env":       cfg.Env,
+		"logLevel":  cfg.LogLevel,
+		"logFormat": cfg.LogFormat,
+	})
 
 	// Initialize server
-	server := NewServer(cfg)
+	server, err := NewServer(cfg)
+	if err != nil {
+		logger.Fatal("Failed to initialize server", map[string]interface{}{
+			"error": err.Error(),
+		})
+	}
+	defer server.cleanup()
 
 	// Setup routes and middleware
 	server.setupRoutes()
@@ -47,15 +72,65 @@ func main() {
 	server.start()
 }
 
-func NewServer(cfg *config.Config) *Server {
+func NewServer(cfg *config.Config) (*Server, error) {
+	logger := logging.GetLogger()
+
+	// Initialize database
+	db, err := database.NewDatabase(cfg)
+	if err != nil {
+		logger.Error("Failed to initialize database", map[string]interface{}{
+			"error": err.Error(),
+		})
+		return nil, err
+	}
+	logger.Info("Database initialized successfully", nil)
+
+	// Initialize Redis cache
+	redisCache, err := cache.NewRedisCache(cfg)
+	if err != nil {
+		logger.Warn("Failed to connect to Redis", map[string]interface{}{
+			"error": err.Error(),
+		})
+		redisCache = nil
+	} else {
+		logger.Info("Redis cache initialized successfully", nil)
+	}
+
+	// Initialize password hasher
+	passwordHasher := security.NewPasswordHasher(cfg.BcryptCost)
+	logger.Info("Password hasher initialized", map[string]interface{}{
+		"bcryptCost": cfg.BcryptCost,
+	})
+
 	// Initialize services
 	authService := auth.NewAuthService(cfg)
 	userService := user.NewUserService(cfg)
 	categoryService := category.NewCategoryService(cfg)
 	itemService := item.NewItemService(cfg)
 
+	// Initialize AI services
+	aiService, err := ai.NewAIServiceManager(cfg)
+	if err != nil {
+		logger.Warn("Failed to initialize AI services", map[string]interface{}{
+			"error": err.Error(),
+		})
+		aiService = nil
+	} else {
+		logger.Info("AI services initialized successfully", map[string]interface{}{
+			"gemini_available": aiService.IsGeminiAvailable(),
+		})
+	}
+
+	// Initialize AI handler
+	var aiHandler *ai.AIServiceHandler
+	if aiService != nil {
+		aiHandler = ai.NewAIServiceHandler(cfg, aiService)
+	}
+
 	// Initialize router
 	router := mux.NewRouter()
+
+	logger.Info("All services initialized successfully", nil)
 
 	return &Server{
 		config:          cfg,
@@ -63,8 +138,14 @@ func NewServer(cfg *config.Config) *Server {
 		userService:     userService,
 		categoryService: categoryService,
 		itemService:     itemService,
+		aiService:       aiService,
+		aiHandler:       aiHandler,
+		db:              db,
+		cache:           redisCache,
 		router:          router,
-	}
+		logger:          logger,
+		passwordHasher:  passwordHasher,
+	}, nil
 }
 
 func (s *Server) setupRoutes() {
@@ -79,32 +160,26 @@ func (s *Server) setupRoutes() {
 
 	// Health check
 	s.router.HandleFunc("/health", s.healthCheck).Methods("GET")
-	
+
 	// API documentation
 	s.router.HandleFunc("/", s.welcome).Methods("GET")
 }
 
 func (s *Server) setupMiddleware(api *mux.Router) {
 	// Global middleware for all API routes
-	api.Use(middleware.LoggingMiddleware)
 	api.Use(middleware.RequestIDMiddleware)
 	api.Use(middleware.SecurityHeadersMiddleware)
 
 	// Rate limiting middleware
 	rateLimiter := middleware.NewRateLimiter(
-		100, // requests per minute
-		1*time.Minute,
+		s.config.RateLimitRequests,
+		s.config.RateLimitWindow,
 	)
-	api.Use(rateLimiter.Middleware)
+	api.Use(rateLimiter.RateLimitMiddleware)
 
 	// CORS middleware
 	c := cors.New(cors.Options{
-		AllowedOrigins: []string{
-			"http://localhost:3000",  // Next.js dev
-			"http://localhost:3001",  // Alternative dev port
-			"https://satu-lemari.vercel.app", // Production web
-			// Add your production domains here
-		},
+		AllowedOrigins: s.config.AllowedOrigins,
 		AllowedMethods: []string{
 			http.MethodGet,
 			http.MethodPost,
@@ -134,25 +209,35 @@ func (s *Server) setupMiddleware(api *mux.Router) {
 func (s *Server) registerRoutes(api *mux.Router) {
 	// Public routes (no authentication required)
 	publicRoutes := api.PathPrefix("").Subrouter()
-	
-	// Auth routes
-	s.authService.RegisterRoutes(publicRoutes)
-	
+
+	// Auth routes - only verify auth is public
+	publicRoutes.HandleFunc("/auth/verify", s.authService.VerifyAuth).Methods("POST")
+
 	// Public category routes
 	s.categoryService.RegisterRoutes(publicRoutes)
-	
+
 	// Public item routes
 	s.itemService.RegisterRoutes(publicRoutes)
-	
-	// Public user routes (search, profiles)
-	s.userService.RegisterRoutes(publicRoutes)
+
+	// Public user routes (only search and profile viewing)
+	publicRoutes.HandleFunc("/users/{user_id}/profile", s.userService.GetUserProfile).Methods("GET")
+	publicRoutes.HandleFunc("/users/search", s.userService.SearchUsers).Methods("GET")
+
+	// AI routes (public - no authentication required for basic AI features)
+	if s.aiHandler != nil {
+		s.aiHandler.RegisterRoutes(publicRoutes)
+	}
 
 	// Protected routes (authentication required)
 	protectedRoutes := api.PathPrefix("").Subrouter()
-	
-	// Authentication middleware
-	authMiddleware := middleware.NewAuthenticationMiddleware(s.authService.GetClient())
-	protectedRoutes.Use(authMiddleware.Middleware)
+
+	// JWT Authentication middleware
+	jwtMiddleware := middleware.NewJWTAuthMiddleware(s.authService.GetJWTService())
+	protectedRoutes.Use(jwtMiddleware.RequireAuth)
+
+	// Protected auth routes
+	protectedRoutes.HandleFunc("/auth/refresh", s.authService.RefreshToken).Methods("POST")
+	protectedRoutes.HandleFunc("/auth/logout", s.authService.Logout).Methods("POST")
 
 	// Protected user routes
 	protectedRoutes.HandleFunc("/users/me", s.userService.GetMyProfile).Methods("GET")
@@ -170,44 +255,53 @@ func (s *Server) registerRoutes(api *mux.Router) {
 
 	// Admin only routes
 	adminRoutes := api.PathPrefix("").Subrouter()
-	
-	// Authentication  Admin authorization middleware
-	adminRoutes.Use(authMiddleware.Middleware)
-	adminAuthMiddleware := middleware.NewAuthorizationMiddleware([]string{"admin"})
-	adminRoutes.Use(adminAuthMiddleware.Middleware)
+
+	// JWT Authentication + Admin authorization middleware
+	adminRoutes.Use(jwtMiddleware.RequireAuth)
+	adminRoutes.Use(jwtMiddleware.RequireAdmin)
 
 	// Admin category routes
 	adminRoutes.HandleFunc("/categories", s.categoryService.CreateCategory).Methods("POST")
 	adminRoutes.HandleFunc("/categories/{category_id}", s.categoryService.UpdateCategory).Methods("PUT")
 	adminRoutes.HandleFunc("/categories/{category_id}", s.categoryService.DeleteCategory).Methods("DELETE")
-
-	// Partner only routes
-	partnerRoutes := api.PathPrefix("").Subrouter()
-	
-	// Authentication  Partner authorization middleware
-	partnerRoutes.Use(authMiddleware.Middleware)
-	partnerAuthMiddleware := middleware.NewAuthorizationMiddleware([]string{"partner", "admin"})
-	partnerRoutes.Use(partnerAuthMiddleware.Middleware)
-
-	// Partner routes are already handled in the protected routes section
-	// This section is for future partner-specific endpoints
 }
 
 func (s *Server) healthCheck(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	// Check database health
+	dbStatus := "connected"
+	if err := s.db.HealthCheck(ctx); err != nil {
+		dbStatus = "disconnected"
+		log.Printf("Database health check failed: %v", err)
+	}
+
+	// Check Redis health
+	cacheStatus := "connected"
+	if s.cache != nil {
+		if err := s.cache.Ping(ctx); err != nil {
+			cacheStatus = "disconnected"
+			log.Printf("Redis health check failed: %v", err)
+		}
+	} else {
+		cacheStatus = "not configured"
+	}
+
 	response := map[string]interface{}{
 		"status":    "healthy",
 		"service":   "satu-lemari-api",
 		"version":   "1.0.0",
 		"timestamp": time.Now().Format(time.RFC3339),
 		"checks": map[string]string{
-			"database": "connected", // You could add actual database health check here
+			"database": dbStatus,
+			"cache":    cacheStatus,
 			"firebase": "connected", // You could add actual Firebase health check here
 		},
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	
+
 	if err := json.NewEncoder(w).Encode(response); err != nil {
 		log.Printf("Error encoding health check response: %v", err)
 	}
@@ -233,12 +327,14 @@ func (s *Server) welcome(w http.ResponseWriter, r *http.Request) {
 			"Real-time Notifications",
 			"Weekly Donation Quotas",
 			"Geolocation Services",
+			"Redis Caching",
+			"Queue System",
 		},
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	
+
 	if err := json.NewEncoder(w).Encode(response); err != nil {
 		log.Printf("Error encoding welcome response: %v", err)
 	}
@@ -247,7 +343,7 @@ func (s *Server) welcome(w http.ResponseWriter, r *http.Request) {
 func (s *Server) start() {
 	// Create HTTP server
 	s.httpServer = &http.Server{
-		Addr:         ":"  s.config.Port,
+		Addr:         ":" + s.config.Port,
 		Handler:      s.router,
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 15 * time.Second,
@@ -256,41 +352,56 @@ func (s *Server) start() {
 
 	// Start server in a goroutine
 	go func() {
-		log.Printf("🚀 SatuLemari API server starting on port %s", s.config.Port)
-		log.Printf("📚 Environment: %s", s.config.Environment)
-		log.Printf("🔗 Health check: http://localhost:%s/health", s.config.Port)
-		log.Printf("📋 API docs: http://localhost:%s/", s.config.Port)
-		
+		log.Printf("Server starting on port %s", s.config.Port)
 		if err := s.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("❌ Failed to start server: %v", err)
+			log.Fatalf("Failed to start server: %v", err)
 		}
 	}()
 
-	// Wait for interrupt signal to gracefully shutdown
+	// Wait for interrupt signal
 	s.waitForShutdown()
 }
 
 func (s *Server) waitForShutdown() {
+	// Create channel to listen for interrupt signal
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	
-	<-quit
-	log.Println("🛑 Shutting down server...")
 
-	// Create a deadline for shutdown
+	// Wait for interrupt signal
+	<-quit
+	log.Println("Server is shutting down...")
+
+	// Create context with timeout for shutdown
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// Disable keep-alives
-	s.httpServer.SetKeepAlivesEnabled(false)
-
-	// Attempt graceful shutdown
+	// Shutdown server gracefully
 	if err := s.httpServer.Shutdown(ctx); err != nil {
-		log.Printf("❌ Server forced to shutdown: %v", err)
-	} else {
-		log.Println("✅ Server gracefully stopped")
+		log.Printf("Server forced to shutdown: %v", err)
 	}
+
+	log.Println("Server exited")
 }
 
-// For JSON encoding in health check and welcome endpoints
-import "encoding/json"
+func (s *Server) cleanup() {
+	// Close AI services
+	if s.aiService != nil {
+		if err := s.aiService.Close(); err != nil {
+			log.Printf("Error closing AI services: %v", err)
+		}
+	}
+
+	// Close database connection
+	if s.db != nil {
+		if err := s.db.Close(); err != nil {
+			log.Printf("Error closing database: %v", err)
+		}
+	}
+
+	// Close Redis connection
+	if s.cache != nil {
+		if err := s.cache.Close(); err != nil {
+			log.Printf("Error closing Redis: %v", err)
+		}
+	}
+}

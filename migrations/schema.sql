@@ -6,9 +6,9 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 -- Enable RLS (Row Level Security)
 ALTER DATABASE postgres SET "timezone" TO 'Asia/Jakarta';
 
--- Users table
+-- Users table - using Firebase UID as primary key
 CREATE TABLE IF NOT EXISTS users (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id VARCHAR(128) PRIMARY KEY, -- Firebase UID (max 128 chars)
     email VARCHAR(255) UNIQUE NOT NULL,
     username VARCHAR(100) UNIQUE NOT NULL,
     full_name VARCHAR(255),
@@ -42,7 +42,7 @@ CREATE TABLE IF NOT EXISTS categories (
 -- Items table (clothes)
 CREATE TABLE IF NOT EXISTS items (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    partner_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    partner_id VARCHAR(128) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     category_id UUID NOT NULL REFERENCES categories(id),
     name VARCHAR(255) NOT NULL,
     description TEXT,
@@ -63,8 +63,8 @@ CREATE TABLE IF NOT EXISTS items (
 CREATE TABLE IF NOT EXISTS requests (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     item_id UUID NOT NULL REFERENCES items(id) ON DELETE CASCADE,
-    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    partner_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    user_id VARCHAR(128) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    partner_id VARCHAR(128) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     type VARCHAR(20) CHECK (type IN ('donation', 'rental')) NOT NULL,
     quantity INTEGER NOT NULL DEFAULT 1,
     reason TEXT,
@@ -84,8 +84,8 @@ CREATE TABLE IF NOT EXISTS transactions (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     request_id UUID NOT NULL REFERENCES requests(id) ON DELETE CASCADE,
     item_id UUID NOT NULL REFERENCES items(id),
-    user_id UUID NOT NULL REFERENCES users(id),
-    partner_id UUID NOT NULL REFERENCES users(id),
+    user_id VARCHAR(128) NOT NULL REFERENCES users(id),
+    partner_id VARCHAR(128) NOT NULL REFERENCES users(id),
     type VARCHAR(20) CHECK (type IN ('donation', 'rental')) NOT NULL,
     quantity INTEGER NOT NULL,
     amount DECIMAL(10, 2) DEFAULT 0, -- for rental
@@ -99,10 +99,10 @@ CREATE TABLE IF NOT EXISTS transactions (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
--- Notifications table
+-- Notifications table - updated to use VARCHAR for user_id
 CREATE TABLE IF NOT EXISTS notifications (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    user_id VARCHAR(128) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     title VARCHAR(255) NOT NULL,
     message TEXT NOT NULL,
     type VARCHAR(50) NOT NULL, -- request_update, item_available, reminder, etc.
@@ -141,7 +141,7 @@ CREATE TABLE IF NOT EXISTS queue_jobs (
 -- User recommendations table (AI-based recommendations)
 CREATE TABLE IF NOT EXISTS user_recommendations (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    user_id VARCHAR(128) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     item_id UUID NOT NULL REFERENCES items(id) ON DELETE CASCADE,
     score DECIMAL(5, 2) NOT NULL DEFAULT 0,
     reason JSONB, -- explanation for recommendation
@@ -150,10 +150,10 @@ CREATE TABLE IF NOT EXISTS user_recommendations (
     UNIQUE(user_id, item_id)
 );
 
--- Search queries table (for AI intent matching)
+-- Search queries table (for AI intent matching) - updated to use VARCHAR for user_id
 CREATE TABLE IF NOT EXISTS search_queries (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+    user_id VARCHAR(128) REFERENCES users(id) ON DELETE CASCADE,
     query TEXT NOT NULL,
     intent JSONB, -- parsed intent from AI
     results JSONB, -- search results
@@ -246,20 +246,24 @@ ALTER TABLE requests ENABLE ROW LEVEL SECURITY;
 ALTER TABLE transactions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE notifications ENABLE ROW LEVEL SECURITY;
 
--- RLS Policies
--- Users can view and update their own data
-CREATE POLICY "Users can view own data" ON users FOR SELECT USING (auth.uid() = id);
-CREATE POLICY "Users can update own data" ON users FOR UPDATE USING (auth.uid() = id);
+-- RLS Policies - with proper type casting for Firebase UID
+-- Note: auth.uid() returns UUID, but we store Firebase UID as VARCHAR(128)
+-- We need to cast auth.uid() to VARCHAR for comparison
+
+-- Users policies
+CREATE POLICY "Users can view own data" ON users FOR SELECT USING (auth.uid()::VARCHAR = id);
+CREATE POLICY "Users can update own data" ON users FOR UPDATE USING (auth.uid()::VARCHAR = id);
+CREATE POLICY "Allow user creation during auth" ON users FOR INSERT WITH CHECK (true);
 
 -- Items policies
 CREATE POLICY "Anyone can view active items" ON items FOR SELECT USING (status = 'active');
-CREATE POLICY "Partners can manage own items" ON items FOR ALL USING (auth.uid() = partner_id);
+CREATE POLICY "Partners can manage own items" ON items FOR ALL USING (auth.uid()::VARCHAR = partner_id);
 
 -- Requests policies
-CREATE POLICY "Users can view own requests" ON requests FOR SELECT USING (auth.uid() = user_id OR auth.uid() = partner_id);
-CREATE POLICY "Users can create requests" ON requests FOR INSERT WITH CHECK (auth.uid() = user_id);
-CREATE POLICY "Partners can manage requests for their items" ON requests FOR ALL USING (auth.uid() = partner_id);
+CREATE POLICY "Users can view own requests" ON requests FOR SELECT USING (auth.uid()::VARCHAR = user_id OR auth.uid()::VARCHAR = partner_id);
+CREATE POLICY "Users can create requests" ON requests FOR INSERT WITH CHECK (auth.uid()::VARCHAR = user_id);
+CREATE POLICY "Partners can manage requests for their items" ON requests FOR ALL USING (auth.uid()::VARCHAR = partner_id);
 
 -- Notifications policies
-CREATE POLICY "Users can view own notifications" ON notifications FOR SELECT USING (auth.uid() = user_id);
-CREATE POLICY "Users can update own notifications" ON notifications FOR UPDATE USING (auth.uid() = user_id);
+CREATE POLICY "Users can view own notifications" ON notifications FOR SELECT USING (auth.uid()::VARCHAR = user_id);
+CREATE POLICY "Users can update own notifications" ON notifications FOR UPDATE USING (auth.uid()::VARCHAR = user_id);

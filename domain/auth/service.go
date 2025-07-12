@@ -10,10 +10,10 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode"
 
-	"firebase.google.com/go/v4"
+	firebase "firebase.google.com/go/v4"
 	"firebase.google.com/go/v4/auth"
-	"github.com/gorilla/mux"
 	"google.golang.org/api/option"
 
 	"github.com/dzuura/satu-lemari/domain/common"
@@ -25,6 +25,7 @@ import (
 type AuthService struct {
 	config *config.Config
 	client *auth.Client
+	jwt    *JWTService
 }
 
 type AuthRequest struct {
@@ -43,17 +44,26 @@ type AuthResponse struct {
 
 func NewAuthService(cfg *config.Config) *AuthService {
 	client := initializeFirebaseClient(cfg)
+	jwtService := NewJWTService(cfg.JWTSecret, cfg.JWTExpiry)
 	return &AuthService{
 		config: cfg,
 		client: client,
+		jwt:    jwtService,
 	}
 }
 
 func initializeFirebaseClient(cfg *config.Config) *auth.Client {
+	// Process private key - remove quotes and handle newlines properly
+	privateKey := cfg.FirebasePrivateKey
+	if strings.HasPrefix(privateKey, `"`) && strings.HasSuffix(privateKey, `"`) {
+		privateKey = strings.Trim(privateKey, `"`)
+	}
+	privateKey = strings.ReplaceAll(privateKey, "\\n", "\n")
+
 	credMap := map[string]string{
 		"type":                        "service_account",
 		"project_id":                  cfg.FirebaseProjectID,
-		"private_key":                 strings.ReplaceAll(cfg.FirebasePrivateKey, "\\n", "\n"),
+		"private_key":                 privateKey,
 		"client_email":                cfg.FirebaseClientEmail,
 		"auth_uri":                    "https://accounts.google.com/o/oauth2/auth",
 		"token_uri":                   "https://oauth2.googleapis.com/token",
@@ -86,16 +96,15 @@ func (s *AuthService) GetClient() *auth.Client {
 	return s.client
 }
 
-func (s *AuthService) RegisterRoutes(r *mux.Router) {
-	r.HandleFunc("/auth/verify", s.VerifyAuth).Methods("POST")
-	r.HandleFunc("/auth/refresh", s.RefreshToken).Methods("POST")
-	r.HandleFunc("/auth/logout", s.Logout).Methods("POST")
+// GetJWTService exposes JWT service for middleware
+func (s *AuthService) GetJWTService() *JWTService {
+	return s.jwt
 }
 
 func (s *AuthService) VerifyAuth(w http.ResponseWriter, r *http.Request) {
 	var req AuthRequest
 	if err := common.ParseJSONBody(r, &req); err != nil {
-		appError.WriteErrorResponse(w, 
+		appError.WriteErrorResponse(w,
 			appError.New(appError.ErrInvalidInput, "Invalid request body"),
 			common.GenerateTraceID())
 		return
@@ -114,17 +123,17 @@ func (s *AuthService) VerifyAuth(w http.ResponseWriter, r *http.Request) {
 	// Verify token based on type
 	switch req.Type {
 	case "firebase":
-		var err error
-		user, uid, err = s.verifyFirebaseToken(ctx, req.Token)
-		if err != nil {
-			appError.WriteErrorResponse(w, err, common.GenerateTraceID())
+		var appErr *appError.AppError
+		user, uid, appErr = s.verifyFirebaseToken(ctx, req.Token)
+		if appErr != nil {
+			appError.WriteErrorResponse(w, appErr, common.GenerateTraceID())
 			return
 		}
 	case "google":
-		var err error
-		user, uid, err = s.verifyGoogleToken(ctx, req.Token)
-		if err != nil {
-			appError.WriteErrorResponse(w, err, common.GenerateTraceID())
+		var appErr *appError.AppError
+		user, uid, appErr = s.verifyGoogleToken(ctx, req.Token)
+		if appErr != nil {
+			appError.WriteErrorResponse(w, appErr, common.GenerateTraceID())
 			return
 		}
 	default:
@@ -137,23 +146,28 @@ func (s *AuthService) VerifyAuth(w http.ResponseWriter, r *http.Request) {
 	// Determine role based on platform
 	role := s.determineRole(req.Platform)
 
-	// Generate username if not provided
-	username := s.generateUsername(req.Username, user.DisplayName, uid)
-
-	// Create custom token for API access
-	customToken, err := s.client.CustomToken(ctx, uid)
-	if err != nil {
-		log.Printf("Error creating custom token: %v", err)
-		appError.WriteErrorResponse(w,
-			appError.ErrInternalServer,
-			common.GenerateTraceID())
-		return
+	// For login (no username provided), we'll get the existing username from database
+	// For register (username provided), we'll use the provided username
+	var username string
+	if req.Username != "" {
+		// Register flow - use provided username
+		username = s.generateUsername(req.Username, user.DisplayName, uid)
+	} else {
+		// Login flow - username will be retrieved from database
+		username = "" // Will be set from database
 	}
 
 	// Sync user with database
 	userProfile, err := s.syncUserWithDatabase(uid, user.Email, username, role)
 	if err != nil {
-		log.Printf("Error syncing user with database: %v", err)
+		appError.WriteErrorResponse(w, err, common.GenerateTraceID())
+		return
+	}
+
+	// Generate JWT token
+	jwtToken, jwtErr := s.jwt.GenerateToken(uid, user.Email, role, username)
+	if jwtErr != nil {
+		log.Printf("Error generating JWT token: %v", jwtErr)
 		appError.WriteErrorResponse(w,
 			appError.ErrInternalServer,
 			common.GenerateTraceID())
@@ -163,9 +177,9 @@ func (s *AuthService) VerifyAuth(w http.ResponseWriter, r *http.Request) {
 	// Create response
 	response := AuthResponse{
 		User:        userProfile,
-		AccessToken: customToken,
+		AccessToken: jwtToken,
 		TokenType:   "Bearer",
-		ExpiresIn:   3600, // 1 hour
+		ExpiresIn:   int64(s.jwt.GetTokenExpiry().Seconds()),
 	}
 
 	common.WriteSuccessResponse(w, response, "Authentication successful")
@@ -175,16 +189,19 @@ func (s *AuthService) RefreshToken(w http.ResponseWriter, r *http.Request) {
 	// Extract user ID from context (set by auth middleware)
 	userID, ok := common.GetUserIDFromContext(r)
 	if !ok {
-		appError.WriteErrorResponse(w,
-			appError.ErrUnauthorized,
-			common.GenerateTraceID())
+		appError.WriteErrorResponse(w, appError.New(appError.ErrUnauthorized, "Unauthorized"), common.GenerateTraceID())
 		return
 	}
 
-	// Generate new custom token
-	customToken, err := s.client.CustomToken(context.Background(), userID)
+	// Get user info from context
+	email, _ := common.GetUserEmailFromContext(r)
+	role, _ := common.GetUserRoleFromContext(r)
+	username, _ := common.GetUsernameFromContext(r)
+
+	// Generate new JWT token
+	jwtToken, err := s.jwt.GenerateToken(userID, email, role, username)
 	if err != nil {
-		log.Printf("Error refreshing token: %v", err)
+		log.Printf("Error refreshing JWT token: %v", err)
 		appError.WriteErrorResponse(w,
 			appError.ErrInternalServer,
 			common.GenerateTraceID())
@@ -192,9 +209,9 @@ func (s *AuthService) RefreshToken(w http.ResponseWriter, r *http.Request) {
 	}
 
 	response := map[string]interface{}{
-		"access_token": customToken,
+		"access_token": jwtToken,
 		"token_type":   "Bearer",
-		"expires_in":   3600,
+		"expires_in":   int64(s.jwt.GetTokenExpiry().Seconds()),
 	}
 
 	common.WriteSuccessResponse(w, response, "Token refreshed successfully")
@@ -203,7 +220,7 @@ func (s *AuthService) RefreshToken(w http.ResponseWriter, r *http.Request) {
 func (s *AuthService) Logout(w http.ResponseWriter, r *http.Request) {
 	// For Firebase, logout is handled client-side
 	// This endpoint is for logging purposes and cleanup if needed
-	
+
 	userID, _ := common.GetUserIDFromContext(r)
 	log.Printf("User %s logged out", userID)
 
@@ -280,31 +297,74 @@ func (s *AuthService) determineRole(platform string) string {
 }
 
 func (s *AuthService) generateUsername(provided, displayName, uid string) string {
-	if provided != "" && common.IsValidUsername(provided) {
-		return provided
-	}
-	if displayName != "" {
-		// Clean display name to make it a valid username
-		cleaned := strings.ReplaceAll(strings.ToLower(displayName), " ", "_")
-		if common.IsValidUsername(cleaned) {
+	// If username is provided, clean it to make it valid
+	if provided != "" {
+		// Clean the provided username: replace spaces with underscores, remove special chars
+		cleaned := strings.ReplaceAll(strings.ToLower(provided), " ", "_")
+		// Remove any non-alphanumeric characters except underscores
+		var result strings.Builder
+		for _, char := range cleaned {
+			if unicode.IsLetter(char) || unicode.IsDigit(char) || char == '_' {
+				result.WriteRune(char)
+			}
+		}
+		cleaned = result.String()
+
+		// Remove leading/trailing underscores
+		cleaned = strings.Trim(cleaned, "_")
+
+		// Ensure minimum length
+		if len(cleaned) >= 3 {
+			// Truncate if too long
+			if len(cleaned) > 30 {
+				cleaned = cleaned[:30]
+			}
 			return cleaned
 		}
 	}
+
+	// Fallback to display name
+	if displayName != "" {
+		cleaned := strings.ReplaceAll(strings.ToLower(displayName), " ", "_")
+		var result strings.Builder
+		for _, char := range cleaned {
+			if unicode.IsLetter(char) || unicode.IsDigit(char) || char == '_' {
+				result.WriteRune(char)
+			}
+		}
+		cleaned = result.String()
+		cleaned = strings.Trim(cleaned, "_")
+
+		if len(cleaned) >= 3 {
+			if len(cleaned) > 30 {
+				cleaned = cleaned[:30]
+			}
+			return cleaned
+		}
+	}
+
+	// Final fallback to UID-based username
 	return fmt.Sprintf("user_%s", uid[:8])
 }
 
 func (s *AuthService) syncUserWithDatabase(uid, email, username, role string) (*models.UserProfile, *appError.AppError) {
+	// If username is empty, this is a login flow
+	isLoginFlow := username == ""
 	client := &http.Client{Timeout: 10 * time.Second}
 
-	// Check if user exists
+	// Check if user exists by Firebase UID first
 	checkURL := fmt.Sprintf("%s/rest/v1/users?id=eq.%s&select=*", s.config.SupabaseURL, uid)
+	log.Printf("Checking user by UID: %s", uid)
+	log.Printf("Check URL: %s", checkURL)
+
 	req, err := http.NewRequest("GET", checkURL, nil)
 	if err != nil {
 		return nil, appError.New(appError.ErrInternal, "Failed to create request")
 	}
 
-	req.Header.Set("apikey", s.config.SupabaseKey)
-	req.Header.Set("Authorization", "Bearer "s.config.SupabaseKey)
+	// Use service role key for all database operations to bypass RLS
+	req.Header.Set("apikey", s.config.SupabaseServiceRoleKey)
+	req.Header.Set("Authorization", "Bearer "+s.config.SupabaseServiceRoleKey)
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := client.Do(req)
@@ -314,6 +374,8 @@ func (s *AuthService) syncUserWithDatabase(uid, email, username, role string) (*
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		log.Printf("UID check failed with status %d: %s", resp.StatusCode, string(bodyBytes))
 		return nil, appError.New(appError.ErrDatabase, "Database query failed")
 	}
 
@@ -322,18 +384,74 @@ func (s *AuthService) syncUserWithDatabase(uid, email, username, role string) (*
 		return nil, appError.New(appError.ErrInternal, "Failed to read response")
 	}
 
+	log.Printf("UID check response: %s", string(body))
+
 	var existingUsers []models.User
 	if err := json.Unmarshal(body, &existingUsers); err != nil {
 		return nil, appError.New(appError.ErrInternal, "Failed to parse response")
 	}
 
+	log.Printf("Found %d users by UID", len(existingUsers))
+
 	var userProfile *models.UserProfile
 
 	if len(existingUsers) == 0 {
-		// Create new user
-		userProfile, err = s.createUser(uid, email, username, role)
+		// User doesn't exist by UID, check if email already exists
+		emailCheckURL := fmt.Sprintf("%s/rest/v1/users?email=eq.%s&select=*", s.config.SupabaseURL, email)
+		emailReq, err := http.NewRequest("GET", emailCheckURL, nil)
 		if err != nil {
-			return nil, err
+			return nil, appError.New(appError.ErrInternal, "Failed to create email check request")
+		}
+
+		emailReq.Header.Set("apikey", s.config.SupabaseServiceRoleKey)
+		emailReq.Header.Set("Authorization", "Bearer "+s.config.SupabaseServiceRoleKey)
+		emailReq.Header.Set("Content-Type", "application/json")
+
+		emailResp, err := client.Do(emailReq)
+		if err != nil {
+			return nil, appError.New(appError.ErrDatabase, "Database connection failed")
+		}
+		defer emailResp.Body.Close()
+
+		if emailResp.StatusCode == http.StatusOK {
+			emailBody, err := io.ReadAll(emailResp.Body)
+			if err != nil {
+				return nil, appError.New(appError.ErrInternal, "Failed to read email check response")
+			}
+
+			var emailUsers []models.User
+			if err := json.Unmarshal(emailBody, &emailUsers); err != nil {
+				return nil, appError.New(appError.ErrInternal, "Failed to parse email check response")
+			}
+
+			if len(emailUsers) > 0 {
+				// Email exists but UID is different - this shouldn't happen with Firebase
+				// Return the existing user profile
+				user := emailUsers[0]
+				userProfile = &models.UserProfile{
+					ID:          user.ID,
+					Username:    user.Username,
+					FullName:    user.FullName,
+					Photo:       user.Photo,
+					City:        user.City,
+					Description: user.Description,
+					Role:        user.Role,
+					CreatedAt:   user.CreatedAt,
+				}
+				return userProfile, nil
+			}
+		}
+
+		// If this is a login flow and user doesn't exist, return error
+		if isLoginFlow {
+			return nil, appError.New(appError.ErrUnauthorized, "User not found. Please register first.")
+		}
+
+		// Create new user (register flow)
+		var appErr *appError.AppError
+		userProfile, appErr = s.createUser(uid, email, username, role)
+		if appErr != nil {
+			return nil, appErr
 		}
 	} else {
 		// Return existing user profile
@@ -354,17 +472,18 @@ func (s *AuthService) syncUserWithDatabase(uid, email, username, role string) (*
 }
 
 func (s *AuthService) createUser(uid, email, username, role string) (*models.UserProfile, *appError.AppError) {
+	now := time.Now()
 	newUser := map[string]interface{}{
-		"id":         uid,
-		"email":      email,
-		"username":   username,
-		"role":       role,
-		"is_active":  true,
+		"id":                    uid,
+		"email":                 email,
+		"username":              username,
+		"role":                  role,
+		"is_active":             true,
 		"weekly_donation_quota": 3,
 		"weekly_donation_used":  0,
-		"quota_reset_date":      time.Now().Format("2006-01-02"),
-		"created_at": time.Now().Format(time.RFC3339),
-		"updated_at": time.Now().Format(time.RFC3339),
+		"quota_reset_date":      now.Format("2006-01-02"),
+		"created_at":            now.Format(time.RFC3339),
+		"updated_at":            now.Format(time.RFC3339),
 	}
 
 	jsonData, err := json.Marshal(newUser)
@@ -379,8 +498,9 @@ func (s *AuthService) createUser(uid, email, username, role string) (*models.Use
 		return nil, appError.New(appError.ErrInternal, "Failed to create request")
 	}
 
-	req.Header.Set("apikey", s.config.SupabaseKey)
-	req.Header.Set("Authorization", "Bearer "s.config.SupabaseKey)
+	// Use service role key for INSERT operations to bypass RLS
+	req.Header.Set("apikey", s.config.SupabaseServiceRoleKey)
+	req.Header.Set("Authorization", "Bearer "+s.config.SupabaseServiceRoleKey)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Prefer", "return=representation")
 
@@ -393,6 +513,55 @@ func (s *AuthService) createUser(uid, email, username, role string) (*models.Use
 	if resp.StatusCode != http.StatusCreated {
 		bodyBytes, _ := io.ReadAll(resp.Body)
 		log.Printf("Failed to create user: %s", string(bodyBytes))
+
+		// Check if it's a duplicate key error
+		if strings.Contains(string(bodyBytes), "duplicate key value violates unique constraint") {
+			// Try to get the existing user by email
+			client := &http.Client{Timeout: 10 * time.Second}
+			emailCheckURL := fmt.Sprintf("%s/rest/v1/users?email=eq.%s&select=*", s.config.SupabaseURL, email)
+			emailReq, err := http.NewRequest("GET", emailCheckURL, nil)
+			if err != nil {
+				return nil, appError.New(appError.ErrInternal, "Failed to create email check request")
+			}
+
+			emailReq.Header.Set("apikey", s.config.SupabaseServiceRoleKey)
+			emailReq.Header.Set("Authorization", "Bearer "+s.config.SupabaseServiceRoleKey)
+			emailReq.Header.Set("Content-Type", "application/json")
+
+			emailResp, err := client.Do(emailReq)
+			if err != nil {
+				return nil, appError.New(appError.ErrDatabase, "Database connection failed")
+			}
+			defer emailResp.Body.Close()
+
+			if emailResp.StatusCode == http.StatusOK {
+				emailBody, err := io.ReadAll(emailResp.Body)
+				if err != nil {
+					return nil, appError.New(appError.ErrInternal, "Failed to read email check response")
+				}
+
+				var emailUsers []models.User
+				if err := json.Unmarshal(emailBody, &emailUsers); err != nil {
+					return nil, appError.New(appError.ErrInternal, "Failed to parse email check response")
+				}
+
+				if len(emailUsers) > 0 {
+					// Return the existing user profile
+					user := emailUsers[0]
+					return &models.UserProfile{
+						ID:          user.ID,
+						Username:    user.Username,
+						FullName:    user.FullName,
+						Photo:       user.Photo,
+						City:        user.City,
+						Description: user.Description,
+						Role:        user.Role,
+						CreatedAt:   user.CreatedAt,
+					}, nil
+				}
+			}
+		}
+
 		return nil, appError.New(appError.ErrDatabase, "Failed to create user in database")
 	}
 
@@ -403,11 +572,17 @@ func (s *AuthService) createUser(uid, email, username, role string) (*models.Use
 		return nil, appError.New(appError.ErrInternal, "Failed to read response")
 	}
 
+	// Debug: log the response
+	log.Printf("Supabase response: %s", string(bodyBytes))
+
 	if err := json.Unmarshal(bodyBytes, &createdUsers); err != nil {
+		log.Printf("JSON unmarshal error: %v", err)
+		log.Printf("Response body: %s", string(bodyBytes))
 		return nil, appError.New(appError.ErrInternal, "Failed to parse created user")
 	}
 
 	if len(createdUsers) == 0 {
+		log.Printf("No users returned from creation, response: %s", string(bodyBytes))
 		return nil, appError.New(appError.ErrInternal, "No user returned from creation")
 	}
 

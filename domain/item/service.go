@@ -1,4 +1,3 @@
-
 package item
 
 import (
@@ -9,11 +8,10 @@ import (
 	"log"
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
 
-	"github.com/gorilla/mux"
 	"github.com/google/uuid"
+	"github.com/gorilla/mux"
 
 	"github.com/dzuura/satu-lemari/domain/common"
 	"github.com/dzuura/satu-lemari/domain/config"
@@ -26,22 +24,22 @@ type ItemService struct {
 }
 
 type SearchFilters struct {
-	Search         string
-	CategoryID     string
-	Type           string
-	Status         string
-	PartnerID      string
-	MinPrice       float64
-	MaxPrice       float64
-	City           string
-	Size           string
-	Color          string
-	NearLat        float64
-	NearLng        float64
-	MaxDistance    float64
-	OnlyAvailable  bool
-	SortBy         string
-	SortOrder      string
+	Search        string
+	CategoryID    string
+	Type          string
+	Status        string
+	PartnerID     string
+	MinPrice      float64
+	MaxPrice      float64
+	City          string
+	Size          string
+	Color         string
+	NearLat       float64
+	NearLng       float64
+	MaxDistance   float64
+	OnlyAvailable bool
+	SortBy        string
+	SortOrder     string
 }
 
 func NewItemService(cfg *config.Config) *ItemService {
@@ -53,27 +51,20 @@ func NewItemService(cfg *config.Config) *ItemService {
 func (s *ItemService) RegisterRoutes(r *mux.Router) {
 	// Public routes
 	r.HandleFunc("/items", s.GetItems).Methods("GET")
-	r.HandleFunc("/items/{item_id}", s.GetItem).Methods("GET")
 	r.HandleFunc("/items/search", s.SearchItems).Methods("GET")
-	
-	// Partner routes - require authentication
-	r.HandleFunc("/items", s.CreateItem).Methods("POST")
-	r.HandleFunc("/items/{item_id}", s.UpdateItem).Methods("PUT")
-	r.HandleFunc("/items/{item_id}/status", s.UpdateItemStatus).Methods("PATCH")
-	r.HandleFunc("/items/{item_id}", s.DeleteItem).Methods("DELETE")
-	r.HandleFunc("/items/{item_id}/ai-analyze", s.AnalyzeItemWithAI).Methods("POST")
-	
-	// My items
-	r.HandleFunc("/items/mine", s.GetMyItems).Methods("GET")
+	r.HandleFunc("/items/{item_id}", s.GetItem).Methods("GET")
+
+	// Protected routes (will be handled by middleware)
+	// These will be registered in main.go with auth middleware
 }
 
 func (s *ItemService) GetItems(w http.ResponseWriter, r *http.Request) {
 	filters := s.parseSearchFilters(r)
 	pagination := common.GetPaginationParams(r)
 
-	items, total, err := s.searchItems(filters, pagination)
-	if err != nil {
-		appError.WriteErrorResponse(w, err, common.GenerateTraceID())
+	items, total, appErr := s.searchItems(filters, pagination)
+	if appErr != nil {
+		appError.WriteErrorResponse(w, appErr, common.GenerateTraceID())
 		return
 	}
 
@@ -97,7 +88,7 @@ func (s *ItemService) GetItem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Increment view count
+	// Increment view count asynchronously
 	go s.incrementViewCount(itemID.String())
 
 	common.WriteSuccessResponse(w, item, "Item retrieved successfully")
@@ -106,17 +97,7 @@ func (s *ItemService) GetItem(w http.ResponseWriter, r *http.Request) {
 func (s *ItemService) CreateItem(w http.ResponseWriter, r *http.Request) {
 	userID, ok := common.GetUserIDFromContext(r)
 	if !ok {
-		appError.WriteErrorResponse(w,
-			appError.ErrUnauthorized,
-			common.GenerateTraceID())
-		return
-	}
-
-	role, ok := common.GetUserRoleFromContext(r)
-	if !ok || role != "partner" {
-		appError.WriteErrorResponse(w,
-			appError.ErrForbidden,
-			common.GenerateTraceID())
+		appError.WriteErrorResponse(w, appError.New(appError.ErrUnauthorized, "Unauthorized"), common.GenerateTraceID())
 		return
 	}
 
@@ -135,15 +116,10 @@ func (s *ItemService) CreateItem(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Create item
-	item, err := s.createItem(userID, &req)
-	if err != nil {
-		appError.WriteErrorResponse(w, err, common.GenerateTraceID())
+	item, appErr := s.createItem(userID, &req)
+	if appErr != nil {
+		appError.WriteErrorResponse(w, appErr, common.GenerateTraceID())
 		return
-	}
-
-	// If AI analysis is enabled and we have images, analyze them
-	if s.config.OpenAIAPIKey != "" && len(req.Images) > 0 {
-		go s.analyzeItemWithAI(item.ID, req.Images)
 	}
 
 	common.WriteSuccessResponse(w, item, "Item created successfully")
@@ -152,9 +128,7 @@ func (s *ItemService) CreateItem(w http.ResponseWriter, r *http.Request) {
 func (s *ItemService) UpdateItem(w http.ResponseWriter, r *http.Request) {
 	userID, ok := common.GetUserIDFromContext(r)
 	if !ok {
-		appError.WriteErrorResponse(w,
-			appError.ErrUnauthorized,
-			common.GenerateTraceID())
+		appError.WriteErrorResponse(w, appError.New(appError.ErrUnauthorized, "Unauthorized"), common.GenerateTraceID())
 		return
 	}
 
@@ -175,9 +149,7 @@ func (s *ItemService) UpdateItem(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if existing.PartnerID != userID {
-		appError.WriteErrorResponse(w,
-			appError.ErrForbidden,
-			common.GenerateTraceID())
+		appError.WriteErrorResponse(w, appError.New(appError.ErrForbidden, "Forbidden"), common.GenerateTraceID())
 		return
 	}
 
@@ -196,9 +168,9 @@ func (s *ItemService) UpdateItem(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Update item
-	updatedItem, err := s.updateItem(itemID.String(), &req)
-	if err != nil {
-		appError.WriteErrorResponse(w, err, common.GenerateTraceID())
+	updatedItem, appErr := s.updateItem(itemID.String(), &req)
+	if appErr != nil {
+		appError.WriteErrorResponse(w, appErr, common.GenerateTraceID())
 		return
 	}
 
@@ -208,9 +180,7 @@ func (s *ItemService) UpdateItem(w http.ResponseWriter, r *http.Request) {
 func (s *ItemService) UpdateItemStatus(w http.ResponseWriter, r *http.Request) {
 	userID, ok := common.GetUserIDFromContext(r)
 	if !ok {
-		appError.WriteErrorResponse(w,
-			appError.ErrUnauthorized,
-			common.GenerateTraceID())
+		appError.WriteErrorResponse(w, appError.New(appError.ErrUnauthorized, "Unauthorized"), common.GenerateTraceID())
 		return
 	}
 
@@ -241,9 +211,7 @@ func (s *ItemService) UpdateItemStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if existing.PartnerID != userID {
-		appError.WriteErrorResponse(w,
-			appError.ErrForbidden,
-			common.GenerateTraceID())
+		appError.WriteErrorResponse(w, appError.New(appError.ErrForbidden, "Forbidden"), common.GenerateTraceID())
 		return
 	}
 
@@ -252,9 +220,9 @@ func (s *ItemService) UpdateItemStatus(w http.ResponseWriter, r *http.Request) {
 		Status: &req.Status,
 	}
 
-	updatedItem, err := s.updateItem(itemID.String(), updateReq)
-	if err != nil {
-		appError.WriteErrorResponse(w, err, common.GenerateTraceID())
+	updatedItem, appErr := s.updateItem(itemID.String(), updateReq)
+	if appErr != nil {
+		appError.WriteErrorResponse(w, appErr, common.GenerateTraceID())
 		return
 	}
 
@@ -264,9 +232,7 @@ func (s *ItemService) UpdateItemStatus(w http.ResponseWriter, r *http.Request) {
 func (s *ItemService) DeleteItem(w http.ResponseWriter, r *http.Request) {
 	userID, ok := common.GetUserIDFromContext(r)
 	if !ok {
-		appError.WriteErrorResponse(w,
-			appError.ErrUnauthorized,
-			common.GenerateTraceID())
+		appError.WriteErrorResponse(w, appError.New(appError.ErrUnauthorized, "Unauthorized"), common.GenerateTraceID())
 		return
 	}
 
@@ -287,30 +253,28 @@ func (s *ItemService) DeleteItem(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if existing.PartnerID != userID {
-		appError.WriteErrorResponse(w,
-			appError.ErrForbidden,
-			common.GenerateTraceID())
+		appError.WriteErrorResponse(w, appError.New(appError.ErrForbidden, "Forbidden"), common.GenerateTraceID())
 		return
 	}
 
 	// Check if item has pending requests
-	hasPendingRequests, err := s.itemHasPendingRequests(itemID.String())
-	if err != nil {
-		appError.WriteErrorResponse(w, err, common.GenerateTraceID())
+	hasPendingRequests, appErr := s.itemHasPendingRequests(itemID.String())
+	if appErr != nil {
+		appError.WriteErrorResponse(w, appErr, common.GenerateTraceID())
 		return
 	}
 
 	if hasPendingRequests {
 		appError.WriteErrorResponse(w,
-			appError.New(appError.ErrItemInUse, "Cannot delete item with pending requests"),
+			appError.New(appError.ErrConflict, "Cannot delete item with pending requests"),
 			common.GenerateTraceID())
 		return
 	}
 
 	// Soft delete item
-	err = s.deleteItem(itemID.String())
-	if err != nil {
-		appError.WriteErrorResponse(w, err, common.GenerateTraceID())
+	appErr = s.deleteItem(itemID.String())
+	if appErr != nil {
+		appError.WriteErrorResponse(w, appErr, common.GenerateTraceID())
 		return
 	}
 
@@ -320,9 +284,7 @@ func (s *ItemService) DeleteItem(w http.ResponseWriter, r *http.Request) {
 func (s *ItemService) GetMyItems(w http.ResponseWriter, r *http.Request) {
 	userID, ok := common.GetUserIDFromContext(r)
 	if !ok {
-		appError.WriteErrorResponse(w,
-			appError.ErrUnauthorized,
-			common.GenerateTraceID())
+		appError.WriteErrorResponse(w, appError.New(appError.ErrUnauthorized, "Unauthorized"), common.GenerateTraceID())
 		return
 	}
 
@@ -330,9 +292,9 @@ func (s *ItemService) GetMyItems(w http.ResponseWriter, r *http.Request) {
 	filters.PartnerID = userID
 	pagination := common.GetPaginationParams(r)
 
-	items, total, err := s.searchItems(filters, pagination)
-	if err != nil {
-		appError.WriteErrorResponse(w, err, common.GenerateTraceID())
+	items, total, appErr := s.searchItems(filters, pagination)
+	if appErr != nil {
+		appError.WriteErrorResponse(w, appErr, common.GenerateTraceID())
 		return
 	}
 
@@ -344,9 +306,9 @@ func (s *ItemService) SearchItems(w http.ResponseWriter, r *http.Request) {
 	filters := s.parseSearchFilters(r)
 	pagination := common.GetPaginationParams(r)
 
-	items, total, err := s.searchItems(filters, pagination)
-	if err != nil {
-		appError.WriteErrorResponse(w, err, common.GenerateTraceID())
+	items, total, appErr := s.searchItems(filters, pagination)
+	if appErr != nil {
+		appError.WriteErrorResponse(w, appErr, common.GenerateTraceID())
 		return
 	}
 
@@ -357,9 +319,7 @@ func (s *ItemService) SearchItems(w http.ResponseWriter, r *http.Request) {
 func (s *ItemService) AnalyzeItemWithAI(w http.ResponseWriter, r *http.Request) {
 	userID, ok := common.GetUserIDFromContext(r)
 	if !ok {
-		appError.WriteErrorResponse(w,
-			appError.ErrUnauthorized,
-			common.GenerateTraceID())
+		appError.WriteErrorResponse(w, appError.New(appError.ErrUnauthorized, "Unauthorized"), common.GenerateTraceID())
 		return
 	}
 
@@ -380,26 +340,21 @@ func (s *ItemService) AnalyzeItemWithAI(w http.ResponseWriter, r *http.Request) 
 	}
 
 	if existing.PartnerID != userID {
+		appError.WriteErrorResponse(w, appError.New(appError.ErrForbidden, "Forbidden"), common.GenerateTraceID())
+		return
+	}
+
+	if !s.config.EnableAIFeatures {
 		appError.WriteErrorResponse(w,
-			appError.ErrForbidden,
+			appError.New(appError.ErrInternal, "AI features are disabled"),
 			common.GenerateTraceID())
 		return
 	}
 
-	if s.config.OpenAIAPIKey == "" {
-		appError.WriteErrorResponse(w,
-			appError.New(appError.ErrServiceUnavailable, "AI analysis service is not configured"),
-			common.GenerateTraceID())
-		return
-	}
-
-	// Start AI analysis in background
+	// Analyze item with AI
 	go s.analyzeItemWithAI(itemID.String(), existing.Images)
 
-	common.WriteSuccessResponse(w, map[string]interface{}{
-		"message": "AI analysis started",
-		"item_id": itemID.String(),
-	}, "AI analysis initiated successfully")
+	common.WriteSuccessResponse(w, nil, "AI analysis started")
 }
 
 // Helper methods
@@ -497,7 +452,7 @@ func (s *ItemService) searchItems(filters SearchFilters, pagination common.Pagin
 
 	// Add filters to query
 	for _, filter := range sqlFilters {
-		query = "&"  filter
+		query += "&" + filter
 	}
 
 	// Add sorting
@@ -516,7 +471,7 @@ func (s *ItemService) searchItems(filters SearchFilters, pagination common.Pagin
 	}
 
 	req.Header.Set("apikey", s.config.SupabaseKey)
-	req.Header.Set("Authorization", "Bearer "s.config.SupabaseKey)
+	req.Header.Set("Authorization", "Bearer "+s.config.SupabaseKey)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -538,7 +493,7 @@ func (s *ItemService) searchItems(filters SearchFilters, pagination common.Pagin
 	countURL := fmt.Sprintf("%s/rest/v1/items?select=count", s.config.SupabaseURL)
 	if len(sqlFilters) > 0 {
 		for _, filter := range sqlFilters {
-			countURL = "&"  filter
+			countURL += "&" + filter
 		}
 	}
 
@@ -557,7 +512,7 @@ func (s *ItemService) getItemByID(itemID string) (*models.Item, *appError.AppErr
 	}
 
 	req.Header.Set("apikey", s.config.SupabaseKey)
-	req.Header.Set("Authorization", "Bearer "s.config.SupabaseKey)
+	req.Header.Set("Authorization", "Bearer "+s.config.SupabaseKey)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -585,7 +540,7 @@ func (s *ItemService) getItemByID(itemID string) (*models.Item, *appError.AppErr
 func (s *ItemService) createItem(partnerID string, req *models.CreateItemRequest) (*models.Item, *appError.AppError) {
 	newItem := map[string]interface{}{
 		"id":           uuid.New().String(),
-		"title":        req.Title,
+		"title":        req.Name,
 		"description":  req.Description,
 		"category_id":  req.CategoryID,
 		"type":         req.Type,
@@ -615,7 +570,7 @@ func (s *ItemService) createItem(partnerID string, req *models.CreateItemRequest
 	}
 
 	httpReq.Header.Set("apikey", s.config.SupabaseKey)
-	httpReq.Header.Set("Authorization", "Bearer "s.config.SupabaseKey)
+	httpReq.Header.Set("Authorization", "Bearer "+s.config.SupabaseKey)
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Prefer", "return=representation")
 
@@ -655,17 +610,14 @@ func (s *ItemService) updateItem(itemID string, req *models.UpdateItemRequest) (
 	}
 
 	// Only include non-nil fields
-	if req.Title != nil {
-		updateData["title"] = *req.Title
+	if req.Name != nil {
+		updateData["title"] = *req.Name
 	}
 	if req.Description != nil {
 		updateData["description"] = *req.Description
 	}
 	if req.CategoryID != nil {
 		updateData["category_id"] = *req.CategoryID
-	}
-	if req.Type != nil {
-		updateData["type"] = *req.Type
 	}
 	if req.Status != nil {
 		updateData["status"] = *req.Status
@@ -674,7 +626,9 @@ func (s *ItemService) updateItem(itemID string, req *models.UpdateItemRequest) (
 		updateData["price"] = *req.Price
 	}
 	if req.Images != nil {
-		updateData["images"] = *req.Images
+		if len(req.Images) > 0 {
+			updateData["images"] = req.Images
+		}
 	}
 	if req.Size != nil {
 		updateData["size"] = *req.Size
@@ -684,9 +638,6 @@ func (s *ItemService) updateItem(itemID string, req *models.UpdateItemRequest) (
 	}
 	if req.Condition != nil {
 		updateData["condition"] = *req.Condition
-	}
-	if req.IsAvailable != nil {
-		updateData["is_available"] = *req.IsAvailable
 	}
 
 	jsonData, err := json.Marshal(updateData)
@@ -702,7 +653,7 @@ func (s *ItemService) updateItem(itemID string, req *models.UpdateItemRequest) (
 	}
 
 	httpReq.Header.Set("apikey", s.config.SupabaseKey)
-	httpReq.Header.Set("Authorization", "Bearer "s.config.SupabaseKey)
+	httpReq.Header.Set("Authorization", "Bearer "+s.config.SupabaseKey)
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Prefer", "return=representation")
 
@@ -755,7 +706,7 @@ func (s *ItemService) deleteItem(itemID string) *appError.AppError {
 	}
 
 	req.Header.Set("apikey", s.config.SupabaseKey)
-	req.Header.Set("Authorization", "Bearer "s.config.SupabaseKey)
+	req.Header.Set("Authorization", "Bearer "+s.config.SupabaseKey)
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := client.Do(req)
@@ -785,7 +736,7 @@ func (s *ItemService) incrementViewCount(itemID string) {
 	req, _ := http.NewRequest("PATCH", url, bytes.NewBuffer(jsonData))
 
 	req.Header.Set("apikey", s.config.SupabaseKey)
-	req.Header.Set("Authorization", "Bearer "s.config.SupabaseKey)
+	req.Header.Set("Authorization", "Bearer "+s.config.SupabaseKey)
 	req.Header.Set("Content-Type", "application/json")
 
 	client.Do(req)
@@ -801,7 +752,7 @@ func (s *ItemService) itemHasPendingRequests(itemID string) (bool, *appError.App
 	}
 
 	req.Header.Set("apikey", s.config.SupabaseKey)
-	req.Header.Set("Authorization", "Bearer "s.config.SupabaseKey)
+	req.Header.Set("Authorization", "Bearer "+s.config.SupabaseKey)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -818,7 +769,7 @@ func (s *ItemService) itemHasPendingRequests(itemID string) (bool, *appError.App
 }
 
 func (s *ItemService) analyzeItemWithAI(itemID string, images []string) {
-	if s.config.OpenAIAPIKey == "" || len(images) == 0 {
+	if !s.config.EnableAIFeatures || len(images) == 0 {
 		return
 	}
 
@@ -839,7 +790,7 @@ func (s *ItemService) analyzeItemWithAI(itemID string, images []string) {
 	req, _ := http.NewRequest("PATCH", url, bytes.NewBuffer(jsonData))
 
 	req.Header.Set("apikey", s.config.SupabaseKey)
-	req.Header.Set("Authorization", "Bearer "s.config.SupabaseKey)
+	req.Header.Set("Authorization", "Bearer "+s.config.SupabaseKey)
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, _ := client.Do(req)
@@ -857,7 +808,7 @@ func (s *ItemService) getCount(client *http.Client, url string) (int, error) {
 	}
 
 	req.Header.Set("apikey", s.config.SupabaseKey)
-	req.Header.Set("Authorization", "Bearer "s.config.SupabaseKey)
+	req.Header.Set("Authorization", "Bearer "+s.config.SupabaseKey)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -885,13 +836,13 @@ func (s *ItemService) getCount(client *http.Client, url string) (int, error) {
 }
 
 func (s *ItemService) validateCreateRequest(req *models.CreateItemRequest) *appError.AppError {
-	if req.Title == "" {
-		return appError.New(appError.ErrMissingField, "Title is required")
+	if req.Name == "" {
+		return appError.New(appError.ErrMissingField, "Name is required")
 	}
-	if len(req.Title) < 3 || len(req.Title) > 100 {
-		return appError.New(appError.ErrInvalidInput, "Title must be between 3 and 100 characters")
+	if len(req.Name) < 3 || len(req.Name) > 100 {
+		return appError.New(appError.ErrInvalidInput, "Name must be between 3 and 100 characters")
 	}
-	if req.CategoryID == "" {
+	if req.CategoryID == uuid.Nil {
 		return appError.New(appError.ErrMissingField, "Category ID is required")
 	}
 	if req.Type == "" {
@@ -900,7 +851,7 @@ func (s *ItemService) validateCreateRequest(req *models.CreateItemRequest) *appE
 	if !common.Contains([]string{"donation", "rental"}, req.Type) {
 		return appError.New(appError.ErrInvalidInput, "Type must be either 'donation' or 'rental'")
 	}
-	if req.Type == "rental" && req.Price <= 0 {
+	if req.Type == "rental" && (req.Price == nil || *req.Price <= 0) {
 		return appError.New(appError.ErrInvalidInput, "Price is required for rental items")
 	}
 	if len(req.Images) == 0 {
@@ -913,14 +864,9 @@ func (s *ItemService) validateCreateRequest(req *models.CreateItemRequest) *appE
 }
 
 func (s *ItemService) validateUpdateRequest(req *models.UpdateItemRequest) *appError.AppError {
-	if req.Title != nil {
-		if len(*req.Title) < 3 || len(*req.Title) > 100 {
-			return appError.New(appError.ErrInvalidInput, "Title must be between 3 and 100 characters")
-		}
-	}
-	if req.Type != nil {
-		if !common.Contains([]string{"donation", "rental"}, *req.Type) {
-			return appError.New(appError.ErrInvalidInput, "Type must be either 'donation' or 'rental'")
+	if req.Name != nil {
+		if len(*req.Name) < 3 || len(*req.Name) > 100 {
+			return appError.New(appError.ErrInvalidInput, "Name must be between 3 and 100 characters")
 		}
 	}
 	if req.Status != nil {
@@ -929,10 +875,10 @@ func (s *ItemService) validateUpdateRequest(req *models.UpdateItemRequest) *appE
 		}
 	}
 	if req.Images != nil {
-		if len(*req.Images) == 0 {
+		if len(req.Images) == 0 {
 			return appError.New(appError.ErrInvalidInput, "At least one image is required")
 		}
-		if len(*req.Images) > 5 {
+		if len(req.Images) > 5 {
 			return appError.New(appError.ErrInvalidInput, "Maximum 5 images allowed")
 		}
 	}

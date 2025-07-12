@@ -2,29 +2,28 @@ package models
 
 import (
 	"time"
-	"github.com/google/uuid"
 )
 
 // User represents a user in the system
 type User struct {
-	ID                  uuid.UUID  `json:"id" db:"id"`
-	Email               string     `json:"email" db:"email" validate:"required,email"`
-	Username            string     `json:"username" db:"username" validate:"required,min=3,max=30"`
-	FullName            *string    `json:"full_name,omitempty" db:"full_name"`
-	Role                string     `json:"role" db:"role" validate:"required,oneof=user partner admin"`
-	Phone               *string    `json:"phone,omitempty" db:"phone"`
-	Address             *string    `json:"address,omitempty" db:"address"`
-	City                *string    `json:"city,omitempty" db:"city"`
-	Latitude            *float64   `json:"latitude,omitempty" db:"latitude"`
-	Longitude           *float64   `json:"longitude,omitempty" db:"longitude"`
-	Photo               *string    `json:"photo,omitempty" db:"photo"`
-	Description         *string    `json:"description,omitempty" db:"description"`
-	IsActive            bool       `json:"is_active" db:"is_active"`
-	WeeklyDonationQuota int        `json:"weekly_donation_quota" db:"weekly_donation_quota"`
-	WeeklyDonationUsed  int        `json:"weekly_donation_used" db:"weekly_donation_used"`
-	QuotaResetDate      time.Time  `json:"quota_reset_date" db:"quota_reset_date"`
-	CreatedAt           time.Time  `json:"created_at" db:"created_at"`
-	UpdatedAt           time.Time  `json:"updated_at" db:"updated_at"`
+	ID                  string    `json:"id" db:"id"` // Firebase UID
+	Email               string    `json:"email" db:"email" validate:"required,email"`
+	Username            string    `json:"username" db:"username" validate:"required,min=3,max=30"`
+	FullName            *string   `json:"full_name,omitempty" db:"full_name"`
+	Role                string    `json:"role" db:"role" validate:"required,oneof=user partner admin"`
+	Phone               *string   `json:"phone,omitempty" db:"phone"`
+	Address             *string   `json:"address,omitempty" db:"address"`
+	City                *string   `json:"city,omitempty" db:"city"`
+	Latitude            *float64  `json:"latitude,omitempty" db:"latitude"`
+	Longitude           *float64  `json:"longitude,omitempty" db:"longitude"`
+	Photo               *string   `json:"photo,omitempty" db:"photo"`
+	Description         *string   `json:"description,omitempty" db:"description"`
+	IsActive            bool      `json:"is_active" db:"is_active"`
+	WeeklyDonationQuota int       `json:"weekly_donation_quota" db:"weekly_donation_quota"`
+	WeeklyDonationUsed  int       `json:"weekly_donation_used" db:"weekly_donation_used"`
+	QuotaResetDate      string    `json:"quota_reset_date" db:"quota_reset_date"` // Store as string from Supabase
+	CreatedAt           time.Time `json:"created_at" db:"created_at"`
+	UpdatedAt           time.Time `json:"updated_at" db:"updated_at"`
 }
 
 // CreateUserRequest represents request to create a new user
@@ -58,7 +57,7 @@ type UpdateLocationRequest struct {
 
 // UserProfile represents public user profile information
 type UserProfile struct {
-	ID          uuid.UUID `json:"id"`
+	ID          string    `json:"id"` // Firebase UID
 	Username    string    `json:"username"`
 	FullName    *string   `json:"full_name,omitempty"`
 	Photo       *string   `json:"photo,omitempty"`
@@ -76,20 +75,20 @@ type UserWithLocation struct {
 
 // UserStats represents user statistics for dashboard
 type UserStats struct {
-	TotalDonations     int `json:"total_donations"`
-	TotalRentals       int `json:"total_rentals"`
-	ActiveItems        int `json:"active_items"`
-	PendingRequests    int `json:"pending_requests"`
-	CompletedRequests  int `json:"completed_requests"`
-	WeeklyQuotaUsed    int `json:"weekly_quota_used"`
+	TotalDonations       int `json:"total_donations"`
+	TotalRentals         int `json:"total_rentals"`
+	ActiveItems          int `json:"active_items"`
+	PendingRequests      int `json:"pending_requests"`
+	CompletedRequests    int `json:"completed_requests"`
+	WeeklyQuotaUsed      int `json:"weekly_quota_used"`
 	WeeklyQuotaRemaining int `json:"weekly_quota_remaining"`
 }
 
 // UserDashboard represents dashboard data for partner users
 type UserDashboard struct {
-	Stats           UserStats `json:"stats"`
-	RecentRequests  []Request `json:"recent_requests"`
-	RecentItems     []Item    `json:"recent_items"`
+	Stats          UserStats `json:"stats"`
+	RecentRequests []Request `json:"recent_requests"`
+	RecentItems    []Item    `json:"recent_items"`
 }
 
 // IsPartner checks if user is a partner
@@ -112,13 +111,20 @@ func (u *User) CanRequestDonation() bool {
 	if u.Role != "user" {
 		return false
 	}
-	
+
+	// Parse quota reset date from string
+	quotaResetDate, err := time.Parse("2006-01-02", u.QuotaResetDate)
+	if err != nil {
+		// If parsing fails, assume quota needs reset
+		return true
+	}
+
 	// Check if quota needs reset (weekly)
 	now := time.Now()
-	if now.Sub(u.QuotaResetDate).Hours() >= 168 { // 7 days * 24 hours
+	if now.Sub(quotaResetDate).Hours() >= 168 { // 7 days * 24 hours
 		return true // Quota should be reset
 	}
-	
+
 	return u.WeeklyDonationUsed < u.WeeklyDonationQuota
 }
 

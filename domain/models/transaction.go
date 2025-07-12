@@ -2,6 +2,7 @@ package models
 
 import (
 	"time"
+
 	"github.com/google/uuid"
 )
 
@@ -10,8 +11,8 @@ type Transaction struct {
 	ID               uuid.UUID  `json:"id" db:"id"`
 	RequestID        uuid.UUID  `json:"request_id" db:"request_id"`
 	ItemID           uuid.UUID  `json:"item_id" db:"item_id"`
-	UserID           uuid.UUID  `json:"user_id" db:"user_id"`
-	PartnerID        uuid.UUID  `json:"partner_id" db:"partner_id"`
+	UserID           string     `json:"user_id" db:"user_id"`       // Firebase UID
+	PartnerID        string     `json:"partner_id" db:"partner_id"` // Firebase UID
 	Type             string     `json:"type" db:"type" validate:"required,oneof=donation rental"`
 	Quantity         int        `json:"quantity" db:"quantity" validate:"min=1"`
 	Amount           float64    `json:"amount" db:"amount"`
@@ -23,7 +24,7 @@ type Transaction struct {
 	Review           *string    `json:"review,omitempty" db:"review"`
 	CreatedAt        time.Time  `json:"created_at" db:"created_at"`
 	UpdatedAt        time.Time  `json:"updated_at" db:"updated_at"`
-	
+
 	// Relations (will be populated when needed)
 	Request *Request     `json:"request,omitempty"`
 	Item    *Item        `json:"item,omitempty"`
@@ -50,8 +51,8 @@ type UpdateTransactionRequest struct {
 type TransactionFilter struct {
 	Type      *string    `json:"type,omitempty" validate:"omitempty,oneof=donation rental"`
 	Status    *string    `json:"status,omitempty" validate:"omitempty,oneof=active completed cancelled"`
-	UserID    *uuid.UUID `json:"user_id,omitempty"`
-	PartnerID *uuid.UUID `json:"partner_id,omitempty"`
+	UserID    *string    `json:"user_id,omitempty"`    // Firebase UID
+	PartnerID *string    `json:"partner_id,omitempty"` // Firebase UID
 	ItemID    *uuid.UUID `json:"item_id,omitempty"`
 	DateFrom  *time.Time `json:"date_from,omitempty"`
 	DateTo    *time.Time `json:"date_to,omitempty"`
@@ -63,14 +64,14 @@ type TransactionFilter struct {
 
 // TransactionStats represents transaction statistics
 type TransactionStats struct {
-	TotalTransactions   int     `json:"total_transactions"`
-	TotalAmount         float64 `json:"total_amount"`
-	TotalDonations      int     `json:"total_donations"`
-	TotalRentals        int     `json:"total_rentals"`
-	CompletedTransactions int   `json:"completed_transactions"`
-	ActiveTransactions  int     `json:"active_transactions"`
-	AverageRating       float64 `json:"average_rating"`
-	TotalReviews        int     `json:"total_reviews"`
+	TotalTransactions     int     `json:"total_transactions"`
+	TotalAmount           float64 `json:"total_amount"`
+	TotalDonations        int     `json:"total_donations"`
+	TotalRentals          int     `json:"total_rentals"`
+	CompletedTransactions int     `json:"completed_transactions"`
+	ActiveTransactions    int     `json:"active_transactions"`
+	AverageRating         float64 `json:"average_rating"`
+	TotalReviews          int     `json:"total_reviews"`
 }
 
 // IsDonation checks if transaction is for donation
@@ -103,7 +104,7 @@ func (t *Transaction) IsOverdue() bool {
 	if !t.IsRental() || t.ReturnDate == nil || t.ActualReturnDate != nil {
 		return false
 	}
-	
+
 	now := time.Now()
 	return now.After(*t.ReturnDate)
 }
@@ -138,7 +139,7 @@ func (t *Transaction) GetDaysUntilReturn() *int {
 	if !t.IsRental() || t.ReturnDate == nil || t.ActualReturnDate != nil {
 		return nil
 	}
-	
+
 	now := time.Now()
 	days := int(t.ReturnDate.Sub(now).Hours() / 24)
 	return &days
@@ -149,8 +150,8 @@ func (t *Transaction) GetRentalDuration() *int {
 	if !t.IsRental() || t.PickupDate == nil || t.ReturnDate == nil {
 		return nil
 	}
-	
-	days := int(t.ReturnDate.Sub(*t.PickupDate).Hours()/24)  1
+
+	days := int(t.ReturnDate.Sub(*t.PickupDate).Hours()/24) + 1
 	if days < 1 {
 		days = 1
 	}
@@ -196,9 +197,9 @@ func (t *Transaction) GetRatingStars() string {
 	if t.Rating == nil {
 		return "No rating"
 	}
-	
+
 	stars := ""
-	for i := 1; i <= 5; i {
+	for i := 1; i <= 5; i++ {
 		if i <= *t.Rating {
 			stars = "★"
 		} else {

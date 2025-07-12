@@ -222,16 +222,28 @@ func StringSliceToInterface(slice []string) []interface{} {
 	return result
 }
 
-// GetUserIDFromContext extracts user ID from request context
+// GetUserIDFromContext gets user ID from request context
 func GetUserIDFromContext(r *http.Request) (string, bool) {
 	userID, ok := r.Context().Value("user_id").(string)
 	return userID, ok
 }
 
-// GetUserRoleFromContext extracts user role from request context
+// GetUserRoleFromContext gets user role from request context
 func GetUserRoleFromContext(r *http.Request) (string, bool) {
 	role, ok := r.Context().Value("user_role").(string)
 	return role, ok
+}
+
+// GetUserEmailFromContext gets user email from request context
+func GetUserEmailFromContext(r *http.Request) (string, bool) {
+	email, ok := r.Context().Value("user_email").(string)
+	return email, ok
+}
+
+// GetUsernameFromContext gets username from request context
+func GetUsernameFromContext(r *http.Request) (string, bool) {
+	username, ok := r.Context().Value("username").(string)
+	return username, ok
 }
 
 // SetRequestID sets request ID in context

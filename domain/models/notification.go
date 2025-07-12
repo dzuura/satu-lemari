@@ -3,13 +3,14 @@ package models
 import (
 	"fmt"
 	"time"
+
 	"github.com/google/uuid"
 )
 
 // Notification represents a system notification
 type Notification struct {
 	ID        uuid.UUID              `json:"id" db:"id"`
-	UserID    uuid.UUID              `json:"user_id" db:"user_id"`
+	UserID    string                 `json:"user_id" db:"user_id"` // Firebase UID
 	Title     string                 `json:"title" db:"title" validate:"required,max=255"`
 	Message   string                 `json:"message" db:"message" validate:"required"`
 	Type      string                 `json:"type" db:"type" validate:"required"`
@@ -32,28 +33,28 @@ const (
 	NotifRequestRejected  NotificationType = "request_rejected"
 	NotifRequestCompleted NotificationType = "request_completed"
 	NotifRequestReturned  NotificationType = "request_returned"
-	
+
 	// Item related notifications
-	NotifItemAdded       NotificationType = "item_added"
-	NotifItemUpdated     NotificationType = "item_updated"
-	NotifItemOutOfStock  NotificationType = "item_out_of_stock"
-	NotifItemAvailable   NotificationType = "item_available"
-	
+	NotifItemAdded      NotificationType = "item_added"
+	NotifItemUpdated    NotificationType = "item_updated"
+	NotifItemOutOfStock NotificationType = "item_out_of_stock"
+	NotifItemAvailable  NotificationType = "item_available"
+
 	// System notifications
-	NotifQuotaReset      NotificationType = "quota_reset"
-	NotifQuotaExceeded   NotificationType = "quota_exceeded"
-	NotifReminderReturn  NotificationType = "reminder_return"
-	NotifOverdueItem     NotificationType = "overdue_item"
-	
+	NotifQuotaReset     NotificationType = "quota_reset"
+	NotifQuotaExceeded  NotificationType = "quota_exceeded"
+	NotifReminderReturn NotificationType = "reminder_return"
+	NotifOverdueItem    NotificationType = "overdue_item"
+
 	// General notifications
-	NotifWelcome         NotificationType = "welcome"
-	NotifSystemUpdate    NotificationType = "system_update"
-	NotifPromotion       NotificationType = "promotion"
+	NotifWelcome      NotificationType = "welcome"
+	NotifSystemUpdate NotificationType = "system_update"
+	NotifPromotion    NotificationType = "promotion"
 )
 
 // CreateNotificationRequest represents request to create a notification
 type CreateNotificationRequest struct {
-	UserID    uuid.UUID              `json:"user_id" validate:"required"`
+	UserID    string                 `json:"user_id" validate:"required"` // Firebase UID
 	Title     string                 `json:"title" validate:"required,max=255"`
 	Message   string                 `json:"message" validate:"required"`
 	Type      string                 `json:"type" validate:"required"`
@@ -64,7 +65,7 @@ type CreateNotificationRequest struct {
 
 // NotificationFilter represents filters for notification search
 type NotificationFilter struct {
-	UserID   *uuid.UUID `json:"user_id,omitempty"`
+	UserID   *string    `json:"user_id,omitempty"` // Firebase UID
 	Type     *string    `json:"type,omitempty"`
 	IsRead   *bool      `json:"is_read,omitempty"`
 	Platform *string    `json:"platform,omitempty" validate:"omitempty,oneof=web mobile both"`
@@ -102,7 +103,7 @@ func (n *Notification) MarkAsRead() {
 func (n *Notification) GetTimeAgo() string {
 	now := time.Now()
 	diff := now.Sub(n.CreatedAt)
-	
+
 	if diff.Hours() < 1 {
 		minutes := int(diff.Minutes())
 		if minutes < 1 {
@@ -110,30 +111,30 @@ func (n *Notification) GetTimeAgo() string {
 		}
 		return fmt.Sprintf("%d menit yang lalu", minutes)
 	}
-	
+
 	if diff.Hours() < 24 {
 		hours := int(diff.Hours())
 		return fmt.Sprintf("%d jam yang lalu", hours)
 	}
-	
+
 	days := int(diff.Hours() / 24)
 	if days == 1 {
 		return "Kemarin"
 	}
-	
+
 	if days < 7 {
 		return fmt.Sprintf("%d hari yang lalu", days)
 	}
-	
+
 	weeks := days / 7
 	if weeks == 1 {
 		return "Seminggu yang lalu"
 	}
-	
+
 	if weeks < 4 {
 		return fmt.Sprintf("%d minggu yang lalu", weeks)
 	}
-	
+
 	return n.CreatedAt.Format("2 Jan 2006")
 }
 

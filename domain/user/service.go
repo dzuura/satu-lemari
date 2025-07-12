@@ -7,10 +7,11 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
-	"github.com/gorilla/mux"
 	"github.com/google/uuid"
+	"github.com/gorilla/mux"
 
 	"github.com/dzuura/satu-lemari/domain/common"
 	"github.com/dzuura/satu-lemari/domain/config"
@@ -34,7 +35,7 @@ func (s *UserService) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/users/me", s.UpdateMyProfile).Methods("PUT")
 	r.HandleFunc("/users/me/location", s.UpdateMyLocation).Methods("PUT")
 	r.HandleFunc("/users/dashboard", s.GetDashboard).Methods("GET")
-	
+
 	// Public routes
 	r.HandleFunc("/users/{user_id}/profile", s.GetUserProfile).Methods("GET")
 	r.HandleFunc("/users/search", s.SearchUsers).Methods("GET")
@@ -242,7 +243,7 @@ func (s *UserService) getUserByID(userID string) (*models.User, *appError.AppErr
 	}
 
 	req.Header.Set("apikey", s.config.SupabaseKey)
-	req.Header.Set("Authorization", "Bearer " + s.config.SupabaseKey)
+	req.Header.Set("Authorization", "Bearer "+s.config.SupabaseKey)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -315,7 +316,7 @@ func (s *UserService) updateUser(userID string, req *models.UpdateUserRequest) (
 	}
 
 	httpReq.Header.Set("apikey", s.config.SupabaseKey)
-	httpReq.Header.Set("Authorization", "Bearer " + s.config.SupabaseKey)
+	httpReq.Header.Set("Authorization", "Bearer "+s.config.SupabaseKey)
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Prefer", "return=representation")
 
@@ -399,7 +400,7 @@ func (s *UserService) getCount(client *http.Client, url string) (int, error) {
 	}
 
 	req.Header.Set("apikey", s.config.SupabaseKey)
-	req.Header.Set("Authorization", "Bearer " + s.config.SupabaseKey)
+	req.Header.Set("Authorization", "Bearer "+s.config.SupabaseKey)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -429,16 +430,16 @@ func (s *UserService) getCount(client *http.Client, url string) (int, error) {
 func (s *UserService) getRecentRequests(userID string, limit int) ([]models.Request, error) {
 	client := &http.Client{Timeout: 10 * time.Second}
 
-	url := fmt.Sprintf("%s/rest/v1/requests?partner_id=eq.%s&order=created_at.desc&limit=%d&select=*", 
+	url := fmt.Sprintf("%s/rest/v1/requests?partner_id=eq.%s&order=created_at.desc&limit=%d&select=*",
 		s.config.SupabaseURL, userID, limit)
-	
+
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return nil, err
 	}
 
 	req.Header.Set("apikey", s.config.SupabaseKey)
-	req.Header.Set("Authorization", "Bearer " + s.config.SupabaseKey)
+	req.Header.Set("Authorization", "Bearer "+s.config.SupabaseKey)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -462,16 +463,16 @@ func (s *UserService) getRecentRequests(userID string, limit int) ([]models.Requ
 func (s *UserService) getRecentItems(userID string, limit int) ([]models.Item, error) {
 	client := &http.Client{Timeout: 10 * time.Second}
 
-	url := fmt.Sprintf("%s/rest/v1/items?partner_id=eq.%s&order=created_at.desc&limit=%d&select=*", 
+	url := fmt.Sprintf("%s/rest/v1/items?partner_id=eq.%s&order=created_at.desc&limit=%d&select=*",
 		s.config.SupabaseURL, userID, limit)
-	
+
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return nil, err
 	}
 
 	req.Header.Set("apikey", s.config.SupabaseKey)
-	req.Header.Set("Authorization", "Bearer " + s.config.SupabaseKey)
+	req.Header.Set("Authorization", "Bearer "+s.config.SupabaseKey)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -495,37 +496,49 @@ func (s *UserService) getRecentItems(userID string, limit int) ([]models.Item, e
 func (s *UserService) searchUsers(search, role, city string, pagination common.PaginationParams) ([]models.UserProfile, int, *appError.AppError) {
 	client := &http.Client{Timeout: 10 * time.Second}
 
-	// Build query
-	query := "select=id,username,full_name,photo,city,description,role,created_at"
-	filters := []string{}
+	// Build base URL
+	baseURL := fmt.Sprintf("%s/rest/v1/users", s.config.SupabaseURL)
 
+	// Build query parameters
+	params := []string{"select=id,username,full_name,photo,city,description,role,created_at"}
+
+	// Add search filter
 	if search != "" {
-		filters = append(filters, fmt.Sprintf("or=(username.ilike.%%%s%%,full_name.ilike.%%%s%%)", search, search))
-	}
-	if role != "" {
-		filters = append(filters, fmt.Sprintf("role=eq.%s", role))
-	}
-	if city != "" {
-		filters = append(filters, fmt.Sprintf("city.ilike.%%%s%%", city))
+		// Use ilike for case-insensitive partial matching
+		searchFilter := fmt.Sprintf("or=(username.ilike.*%s*,full_name.ilike.*%s*)", search, search)
+		params = append(params, searchFilter)
 	}
 
-	// Add filters to query
-	for _, filter := range filters {
-		query += "&" + filter
+	// Add role filter
+	if role != "" {
+		roleFilter := fmt.Sprintf("role=eq.%s", role)
+		params = append(params, roleFilter)
+	}
+
+	// Add city filter
+	if city != "" {
+		cityFilter := fmt.Sprintf("city.ilike.*%s*", city)
+		params = append(params, cityFilter)
 	}
 
 	// Add pagination
 	offset := (pagination.Page - 1) * pagination.Limit
-	query = fmt.Sprintf("&limit=%d&offset=%d", pagination.Limit, offset)
+	params = append(params, fmt.Sprintf("limit=%d", pagination.Limit))
+	params = append(params, fmt.Sprintf("offset=%d", offset))
 
-	url := fmt.Sprintf("%s/rest/v1/users?%s", s.config.SupabaseURL, query)
+	// Build final URL
+	queryString := strings.Join(params, "&")
+	url := fmt.Sprintf("%s?%s", baseURL, queryString)
+
+	log.Printf("Search URL: %s", url)
+
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return nil, 0, appError.New(appError.ErrInternal, "Failed to create request")
 	}
 
 	req.Header.Set("apikey", s.config.SupabaseKey)
-	req.Header.Set("Authorization", "Bearer " + s.config.SupabaseKey)
+	req.Header.Set("Authorization", "Bearer "+s.config.SupabaseKey)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -533,10 +546,18 @@ func (s *UserService) searchUsers(search, role, city string, pagination common.P
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		log.Printf("Search failed with status %d: %s", resp.StatusCode, string(bodyBytes))
+		return nil, 0, appError.New(appError.ErrDatabase, "Database query failed")
+	}
+
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, 0, appError.New(appError.ErrInternal, "Failed to read response")
 	}
+
+	log.Printf("Search response: %s", string(body))
 
 	var users []models.UserProfile
 	if err := json.Unmarshal(body, &users); err != nil {
@@ -544,8 +565,53 @@ func (s *UserService) searchUsers(search, role, city string, pagination common.P
 	}
 
 	// Get total count for pagination
-	// TODO: Implement proper count query
-	total := len(users) // This is a simplified implementation
+	// Build count query without pagination
+	countParams := []string{"select=count"}
+	if search != "" {
+		countParams = append(countParams, fmt.Sprintf("or=(username.ilike.*%s*,full_name.ilike.*%s*)", search, search))
+	}
+	if role != "" {
+		countParams = append(countParams, fmt.Sprintf("role=eq.%s", role))
+	}
+	if city != "" {
+		countParams = append(countParams, fmt.Sprintf("city.ilike.*%s*", city))
+	}
+
+	countQueryString := strings.Join(countParams, "&")
+	countURL := fmt.Sprintf("%s?%s", baseURL, countQueryString)
+
+	countReq, err := http.NewRequest("GET", countURL, nil)
+	if err != nil {
+		log.Printf("Failed to create count request: %v", err)
+		total := len(users) // Fallback
+		return users, total, nil
+	}
+
+	countReq.Header.Set("apikey", s.config.SupabaseKey)
+	countReq.Header.Set("Authorization", "Bearer "+s.config.SupabaseKey)
+
+	countResp, err := client.Do(countReq)
+	if err != nil {
+		log.Printf("Failed to get count: %v", err)
+		total := len(users) // Fallback
+		return users, total, nil
+	}
+	defer countResp.Body.Close()
+
+	var countResult []map[string]interface{}
+	countBody, _ := io.ReadAll(countResp.Body)
+	if err := json.Unmarshal(countBody, &countResult); err != nil {
+		log.Printf("Failed to parse count response: %v", err)
+		total := len(users) // Fallback
+		return users, total, nil
+	}
+
+	total := 0
+	if len(countResult) > 0 {
+		if count, ok := countResult[0]["count"].(float64); ok {
+			total = int(count)
+		}
+	}
 
 	return users, total, nil
 }

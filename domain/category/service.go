@@ -7,10 +7,11 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
-	"github.com/gorilla/mux"
 	"github.com/google/uuid"
+	"github.com/gorilla/mux"
 
 	"github.com/dzuura/satu-lemari/domain/common"
 	"github.com/dzuura/satu-lemari/domain/config"
@@ -18,76 +19,75 @@ import (
 	"github.com/dzuura/satu-lemari/domain/models"
 )
 
+// CategoryService handles category operations
 type CategoryService struct {
 	config *config.Config
 }
 
+// NewCategoryService creates a new category service
 func NewCategoryService(cfg *config.Config) *CategoryService {
 	return &CategoryService{
 		config: cfg,
 	}
 }
 
+// RegisterRoutes registers category routes
 func (s *CategoryService) RegisterRoutes(r *mux.Router) {
-	// Public routes
 	r.HandleFunc("/categories", s.GetCategories).Methods("GET")
-	r.HandleFunc("/categories/{category_id}", s.GetCategory).Methods("GET")
-	
-	// Admin only routes
+	r.HandleFunc("/categories/{id}", s.GetCategory).Methods("GET")
 	r.HandleFunc("/categories", s.CreateCategory).Methods("POST")
-	r.HandleFunc("/categories/{category_id}", s.UpdateCategory).Methods("PUT")
-	r.HandleFunc("/categories/{category_id}", s.DeleteCategory).Methods("DELETE")
+	r.HandleFunc("/categories/{id}", s.UpdateCategory).Methods("PUT")
+	r.HandleFunc("/categories/{id}", s.DeleteCategory).Methods("DELETE")
 }
 
+// GetCategories handles GET /categories
 func (s *CategoryService) GetCategories(w http.ResponseWriter, r *http.Request) {
-	search := common.GetQueryParam(r, "search", "")
-	isActive := common.GetQueryParam(r, "is_active", "true")
+	// Parse query parameters
+	search := r.URL.Query().Get("search")
+	isActive := r.URL.Query().Get("is_active")
+
+	// Parse pagination
 	pagination := common.GetPaginationParams(r)
 
+	// Get categories
 	categories, total, err := s.searchCategories(search, isActive, pagination)
 	if err != nil {
 		appError.WriteErrorResponse(w, err, common.GenerateTraceID())
 		return
 	}
 
+	// Write response
 	meta := common.CalculateMeta(pagination.Page, pagination.Limit, total)
 	common.WriteSuccessResponseWithMeta(w, categories, meta, "Categories retrieved successfully")
 }
 
+// GetCategory handles GET /categories/{id}
 func (s *CategoryService) GetCategory(w http.ResponseWriter, r *http.Request) {
-	categoryIDStr := common.GetPathParam(r, "category_id")
-	categoryID, err := uuid.Parse(categoryIDStr)
+	vars := mux.Vars(r)
+	categoryID := vars["id"]
+
+	if categoryID == "" {
+		appError.WriteErrorResponse(w, appError.New(appError.ErrInvalidInput, "Category ID is required"), common.GenerateTraceID())
+		return
+	}
+
+	// Get category
+	category, err := s.getCategoryByID(categoryID)
 	if err != nil {
-		appError.WriteErrorResponse(w,
-			appError.New(appError.ErrInvalidInput, "Invalid category ID"),
-			common.GenerateTraceID())
+		appError.WriteErrorResponse(w, err, common.GenerateTraceID())
 		return
 	}
 
-	category, appErr := s.getCategoryByID(categoryID.String())
-	if appErr != nil {
-		appError.WriteErrorResponse(w, appErr, common.GenerateTraceID())
-		return
-	}
-
+	// Write response
 	common.WriteSuccessResponse(w, category, "Category retrieved successfully")
 }
 
+// CreateCategory handles POST /categories
 func (s *CategoryService) CreateCategory(w http.ResponseWriter, r *http.Request) {
-	// Verify admin role
-	role, ok := common.GetUserRoleFromContext(r)
-	if !ok || role != "admin" {
-		appError.WriteErrorResponse(w,
-			appError.ErrForbidden,
-			common.GenerateTraceID())
-		return
-	}
-
+	// Parse request body
 	var req models.CreateCategoryRequest
-	if err := common.ParseJSONBody(r, &req); err != nil {
-		appError.WriteErrorResponse(w,
-			appError.New(appError.ErrInvalidInput, "Invalid request body"),
-			common.GenerateTraceID())
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		appError.WriteErrorResponse(w, appError.New(appError.ErrInvalidInput, "Invalid request body"), common.GenerateTraceID())
 		return
 	}
 
@@ -104,9 +104,7 @@ func (s *CategoryService) CreateCategory(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if exists {
-		appError.WriteErrorResponse(w,
-			appError.New(appError.ErrCategoryExists, "Category name already exists"),
-			common.GenerateTraceID())
+		appError.WriteErrorResponse(w, appError.New(appError.ErrConflict, "Category name already exists"), common.GenerateTraceID())
 		return
 	}
 
@@ -117,143 +115,130 @@ func (s *CategoryService) CreateCategory(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// Write response
 	common.WriteSuccessResponse(w, category, "Category created successfully")
 }
 
+// UpdateCategory handles PUT /categories/{id}
 func (s *CategoryService) UpdateCategory(w http.ResponseWriter, r *http.Request) {
-	// Verify admin role
-	role, ok := common.GetUserRoleFromContext(r)
-	if !ok || role != "admin" {
-		appError.WriteErrorResponse(w,
-			appError.ErrForbidden,
-			common.GenerateTraceID())
+	vars := mux.Vars(r)
+	categoryID := vars["id"]
+
+	if categoryID == "" {
+		appError.WriteErrorResponse(w, appError.New(appError.ErrInvalidInput, "Category ID is required"), common.GenerateTraceID())
 		return
 	}
 
-	categoryIDStr := common.GetPathParam(r, "category_id")
-	categoryID, err := uuid.Parse(categoryIDStr)
-	if err != nil {
-		appError.WriteErrorResponse(w,
-			appError.New(appError.ErrInvalidInput, "Invalid category ID"),
-			common.GenerateTraceID())
-		return
-	}
-
+	// Parse request body
 	var req models.UpdateCategoryRequest
-	if jsonErr := common.ParseJSONBody(r, &req); jsonErr != nil {
-		appError.WriteErrorResponse(w,
-			appError.New(appError.ErrInvalidInput, "Invalid request body"),
-			common.GenerateTraceID())
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		appError.WriteErrorResponse(w, appError.New(appError.ErrInvalidInput, "Invalid request body"), common.GenerateTraceID())
 		return
 	}
 
 	// Validate request
-	if appErr := s.validateUpdateRequest(&req); appErr != nil {
-		appError.WriteErrorResponse(w, appErr, common.GenerateTraceID())
+	if err := s.validateUpdateRequest(&req); err != nil {
+		appError.WriteErrorResponse(w, err, common.GenerateTraceID())
 		return
 	}
 
 	// Check if category exists
-	existing, appErr := s.getCategoryByID(categoryID.String())
-	if appErr != nil {
-		appError.WriteErrorResponse(w, appErr, common.GenerateTraceID())
+	existingCategory, err := s.getCategoryByID(categoryID)
+	if err != nil {
+		appError.WriteErrorResponse(w, err, common.GenerateTraceID())
 		return
 	}
 
-	// Check if new name conflicts with another category
-	if req.Name != nil && *req.Name != existing.Name {
-		exists, appErr := s.categoryNameExists(*req.Name)
-		if appErr != nil {
-			appError.WriteErrorResponse(w, appErr, common.GenerateTraceID())
+	// Check if new name conflicts with existing category
+	if req.Name != nil && *req.Name != existingCategory.Name {
+		exists, err := s.categoryNameExists(*req.Name)
+		if err != nil {
+			appError.WriteErrorResponse(w, err, common.GenerateTraceID())
 			return
 		}
 		if exists {
-			appError.WriteErrorResponse(w,
-				appError.New(appError.ErrCategoryExists, "Category name already exists"),
-				common.GenerateTraceID())
+			appError.WriteErrorResponse(w, appError.New(appError.ErrConflict, "Category name already exists"), common.GenerateTraceID())
 			return
 		}
 	}
 
 	// Update category
-	updatedCategory, appErr := s.updateCategory(categoryID.String(), &req)
-	if appErr != nil {
-		appError.WriteErrorResponse(w, appErr, common.GenerateTraceID())
+	category, err := s.updateCategory(categoryID, &req)
+	if err != nil {
+		appError.WriteErrorResponse(w, err, common.GenerateTraceID())
 		return
 	}
 
-	common.WriteSuccessResponse(w, updatedCategory, "Category updated successfully")
+	// Write response
+	common.WriteSuccessResponse(w, category, "Category updated successfully")
 }
 
+// DeleteCategory handles DELETE /categories/{id}
 func (s *CategoryService) DeleteCategory(w http.ResponseWriter, r *http.Request) {
-	// Verify admin role
-	role, ok := common.GetUserRoleFromContext(r)
-	if !ok || role != "admin" {
-		appError.WriteErrorResponse(w,
-			appError.ErrForbidden,
-			common.GenerateTraceID())
+	vars := mux.Vars(r)
+	categoryID := vars["id"]
+
+	if categoryID == "" {
+		appError.WriteErrorResponse(w, appError.New(appError.ErrInvalidInput, "Category ID is required"), common.GenerateTraceID())
 		return
 	}
 
-	categoryIDStr := common.GetPathParam(r, "category_id")
-	categoryID, err := uuid.Parse(categoryIDStr)
+	// Check if category has items
+	hasItems, err := s.categoryHasItems(categoryID)
 	if err != nil {
-		appError.WriteErrorResponse(w,
-			appError.New(appError.ErrInvalidInput, "Invalid category ID"),
-			common.GenerateTraceID())
-		return
-	}
-
-	// Check if category has associated items
-	hasItems, appErr := s.categoryHasItems(categoryID.String())
-	if appErr != nil {
-		appError.WriteErrorResponse(w, appErr, common.GenerateTraceID())
+		appError.WriteErrorResponse(w, err, common.GenerateTraceID())
 		return
 	}
 	if hasItems {
-		appError.WriteErrorResponse(w,
-			appError.New(appError.ErrCategoryInUse, "Cannot delete category with associated items"),
-			common.GenerateTraceID())
+		appError.WriteErrorResponse(w, appError.New(appError.ErrConflict, "Cannot delete category with existing items"), common.GenerateTraceID())
 		return
 	}
 
-	// Delete category (soft delete by setting is_active to false)
-	appErr = s.deleteCategory(categoryID.String())
-	if appErr != nil {
-		appError.WriteErrorResponse(w, appErr, common.GenerateTraceID())
+	// Delete category (soft delete)
+	err = s.deleteCategory(categoryID)
+	if err != nil {
+		appError.WriteErrorResponse(w, err, common.GenerateTraceID())
 		return
 	}
 
-	common.WriteSuccessResponse(w, nil, "Category deleted successfully")
+	// Write response
+	common.WriteSuccessResponse(w, map[string]string{"message": "Category deleted successfully"}, "Category deleted successfully")
 }
 
-// Helper methods
-
+// searchCategories searches categories with filters and pagination
 func (s *CategoryService) searchCategories(search, isActive string, pagination common.PaginationParams) ([]models.Category, int, *appError.AppError) {
 	client := &http.Client{Timeout: 10 * time.Second}
 
 	// Build query
-	query := "select=id,name,description,icon,is_active,created_at,updated_at"
-	filters := []string{}
+	query := "select=*"
+
+	// Add filters
+	var filters []string
 
 	if search != "" {
-		filters = append(filters, fmt.Sprintf("or=(name.ilike.%%%s%%,description.ilike.%%%s%%)", search, search))
+		filters = append(filters, fmt.Sprintf("name.ilike.%%%s%%", search))
 	}
+
 	if isActive != "" {
-		filters = append(filters, fmt.Sprintf("is_active=eq.%s", isActive))
+		switch isActive {
+		case "true":
+			filters = append(filters, "is_active.eq.true")
+		case "false":
+			filters = append(filters, "is_active.eq.false")
+		}
 	}
 
 	// Add filters to query
 	for _, filter := range filters {
-		query = "&"  filter
+		query += "&" + filter
 	}
 
 	// Add sorting
-	query = "&order=name.asc"
+	query += "&order=name.asc"
 
 	// Add pagination
 	offset := (pagination.Page - 1) * pagination.Limit
-	query = fmt.Sprintf("&limit=%d&offset=%d", pagination.Limit, offset)
+	query += fmt.Sprintf("&limit=%d&offset=%d", pagination.Limit, offset)
 
 	url := fmt.Sprintf("%s/rest/v1/categories?%s", s.config.SupabaseURL, query)
 	req, err := http.NewRequest("GET", url, nil)
@@ -262,7 +247,7 @@ func (s *CategoryService) searchCategories(search, isActive string, pagination c
 	}
 
 	req.Header.Set("apikey", s.config.SupabaseKey)
-	req.Header.Set("Authorization", "Bearer "s.config.SupabaseKey)
+	req.Header.Set("Authorization", "Bearer "+s.config.SupabaseKey)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -284,7 +269,7 @@ func (s *CategoryService) searchCategories(search, isActive string, pagination c
 	countURL := fmt.Sprintf("%s/rest/v1/categories?select=count", s.config.SupabaseURL)
 	if len(filters) > 0 {
 		for _, filter := range filters {
-			countURL = "&"  filter
+			countURL += "&" + filter
 		}
 	}
 
@@ -303,7 +288,7 @@ func (s *CategoryService) getCategoryByID(categoryID string) (*models.Category, 
 	}
 
 	req.Header.Set("apikey", s.config.SupabaseKey)
-	req.Header.Set("Authorization", "Bearer "s.config.SupabaseKey)
+	req.Header.Set("Authorization", "Bearer "+s.config.SupabaseKey)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -352,7 +337,7 @@ func (s *CategoryService) createCategory(req *models.CreateCategoryRequest) (*mo
 	}
 
 	httpReq.Header.Set("apikey", s.config.SupabaseKey)
-	httpReq.Header.Set("Authorization", "Bearer "s.config.SupabaseKey)
+	httpReq.Header.Set("Authorization", "Bearer "+s.config.SupabaseKey)
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Prefer", "return=representation")
 
@@ -418,7 +403,7 @@ func (s *CategoryService) updateCategory(categoryID string, req *models.UpdateCa
 	}
 
 	httpReq.Header.Set("apikey", s.config.SupabaseKey)
-	httpReq.Header.Set("Authorization", "Bearer "s.config.SupabaseKey)
+	httpReq.Header.Set("Authorization", "Bearer "+s.config.SupabaseKey)
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Prefer", "return=representation")
 
@@ -460,21 +445,21 @@ func (s *CategoryService) deleteCategory(categoryID string) *appError.AppError {
 
 	jsonData, err := json.Marshal(updateData)
 	if err != nil {
-		return appError.New(appError.ErrInternal, "Failed to marshal update data")
+		return appError.New(appError.ErrInternal, "Failed to marshal delete data")
 	}
 
 	client := &http.Client{Timeout: 10 * time.Second}
 	url := fmt.Sprintf("%s/rest/v1/categories?id=eq.%s", s.config.SupabaseURL, categoryID)
-	req, err := http.NewRequest("PATCH", url, bytes.NewBuffer(jsonData))
+	httpReq, err := http.NewRequest("PATCH", url, bytes.NewBuffer(jsonData))
 	if err != nil {
 		return appError.New(appError.ErrInternal, "Failed to create request")
 	}
 
-	req.Header.Set("apikey", s.config.SupabaseKey)
-	req.Header.Set("Authorization", "Bearer "s.config.SupabaseKey)
-	req.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("apikey", s.config.SupabaseKey)
+	httpReq.Header.Set("Authorization", "Bearer "+s.config.SupabaseKey)
+	httpReq.Header.Set("Content-Type", "application/json")
 
-	resp, err := client.Do(req)
+	resp, err := client.Do(httpReq)
 	if err != nil {
 		return appError.New(appError.ErrDatabase, "Failed to delete category")
 	}
@@ -492,14 +477,14 @@ func (s *CategoryService) deleteCategory(categoryID string) *appError.AppError {
 func (s *CategoryService) categoryNameExists(name string) (bool, *appError.AppError) {
 	client := &http.Client{Timeout: 10 * time.Second}
 
-	url := fmt.Sprintf("%s/rest/v1/categories?name=eq.%s&select=count", s.config.SupabaseURL, name)
+	url := fmt.Sprintf("%s/rest/v1/categories?name=eq.%s&select=id", s.config.SupabaseURL, name)
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return false, appError.New(appError.ErrInternal, "Failed to create request")
 	}
 
 	req.Header.Set("apikey", s.config.SupabaseKey)
-	req.Header.Set("Authorization", "Bearer "s.config.SupabaseKey)
+	req.Header.Set("Authorization", "Bearer "+s.config.SupabaseKey)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -507,25 +492,30 @@ func (s *CategoryService) categoryNameExists(name string) (bool, *appError.AppEr
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		return false, appError.New(appError.ErrDatabase, "Database query failed")
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return false, appError.New(appError.ErrInternal, "Failed to read response")
 	}
 
-	count, err := s.getCount(client, url)
-	return count > 0, nil
+	var categories []map[string]interface{}
+	if err := json.Unmarshal(body, &categories); err != nil {
+		return false, appError.New(appError.ErrInternal, "Failed to parse response")
+	}
+
+	return len(categories) > 0, nil
 }
 
 func (s *CategoryService) categoryHasItems(categoryID string) (bool, *appError.AppError) {
 	client := &http.Client{Timeout: 10 * time.Second}
 
-	url := fmt.Sprintf("%s/rest/v1/items?category_id=eq.%s&select=count", s.config.SupabaseURL, categoryID)
+	url := fmt.Sprintf("%s/rest/v1/items?category_id=eq.%s&select=id&limit=1", s.config.SupabaseURL, categoryID)
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return false, appError.New(appError.ErrInternal, "Failed to create request")
 	}
 
 	req.Header.Set("apikey", s.config.SupabaseKey)
-	req.Header.Set("Authorization", "Bearer "s.config.SupabaseKey)
+	req.Header.Set("Authorization", "Bearer "+s.config.SupabaseKey)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -533,12 +523,17 @@ func (s *CategoryService) categoryHasItems(categoryID string) (bool, *appError.A
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		return false, appError.New(appError.ErrDatabase, "Database query failed")
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return false, appError.New(appError.ErrInternal, "Failed to read response")
 	}
 
-	count, err := s.getCount(client, url)
-	return count > 0, nil
+	var items []map[string]interface{}
+	if err := json.Unmarshal(body, &items); err != nil {
+		return false, appError.New(appError.ErrInternal, "Failed to parse response")
+	}
+
+	return len(items) > 0, nil
 }
 
 func (s *CategoryService) getCount(client *http.Client, url string) (int, error) {
@@ -548,7 +543,7 @@ func (s *CategoryService) getCount(client *http.Client, url string) (int, error)
 	}
 
 	req.Header.Set("apikey", s.config.SupabaseKey)
-	req.Header.Set("Authorization", "Bearer "s.config.SupabaseKey)
+	req.Header.Set("Authorization", "Bearer "+s.config.SupabaseKey)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -561,14 +556,17 @@ func (s *CategoryService) getCount(client *http.Client, url string) (int, error)
 		return 0, err
 	}
 
-	var result []map[string]interface{}
-	if err := json.Unmarshal(body, &result); err != nil {
+	// Parse count from response
+	var countData []map[string]interface{}
+	if err := json.Unmarshal(body, &countData); err != nil {
 		return 0, err
 	}
 
-	if len(result) > 0 {
-		if count, ok := result[0]["count"].(float64); ok {
-			return int(count), nil
+	if len(countData) > 0 {
+		if count, ok := countData[0]["count"]; ok {
+			if countFloat, ok := count.(float64); ok {
+				return int(countFloat), nil
+			}
 		}
 	}
 
@@ -576,32 +574,33 @@ func (s *CategoryService) getCount(client *http.Client, url string) (int, error)
 }
 
 func (s *CategoryService) validateCreateRequest(req *models.CreateCategoryRequest) *appError.AppError {
-	if req.Name == "" {
-		return appError.New(appError.ErrMissingField, "Category name is required")
+	if strings.TrimSpace(req.Name) == "" {
+		return appError.New(appError.ErrInvalidInput, "Category name is required")
 	}
-	if len(req.Name) < 2 || len(req.Name) > 50 {
-		return appError.New(appError.ErrInvalidInput, "Category name must be between 2 and 50 characters")
+
+	if len(req.Name) > 100 {
+		return appError.New(appError.ErrInvalidInput, "Category name must be less than 100 characters")
 	}
-	if len(req.Description) > 255 {
-		return appError.New(appError.ErrInvalidInput, "Description must not exceed 255 characters")
+
+	if req.Description != nil && len(*req.Description) > 500 {
+		return appError.New(appError.ErrInvalidInput, "Category description must be less than 500 characters")
 	}
-	if len(req.Icon) > 100 {
-		return appError.New(appError.ErrInvalidInput, "Icon must not exceed 100 characters")
-	}
+
 	return nil
 }
 
 func (s *CategoryService) validateUpdateRequest(req *models.UpdateCategoryRequest) *appError.AppError {
-	if req.Name != nil {
-		if len(*req.Name) < 2 || len(*req.Name) > 50 {
-			return appError.New(appError.ErrInvalidInput, "Category name must be between 2 and 50 characters")
-		}
+	if req.Name != nil && strings.TrimSpace(*req.Name) == "" {
+		return appError.New(appError.ErrInvalidInput, "Category name cannot be empty")
 	}
-	if req.Description != nil && len(*req.Description) > 255 {
-		return appError.New(appError.ErrInvalidInput, "Description must not exceed 255 characters")
+
+	if req.Name != nil && len(*req.Name) > 100 {
+		return appError.New(appError.ErrInvalidInput, "Category name must be less than 100 characters")
 	}
-	if req.Icon != nil && len(*req.Icon) > 100 {
-		return appError.New(appError.ErrInvalidInput, "Icon must not exceed 100 characters")
+
+	if req.Description != nil && len(*req.Description) > 500 {
+		return appError.New(appError.ErrInvalidInput, "Category description must be less than 500 characters")
 	}
+
 	return nil
 }

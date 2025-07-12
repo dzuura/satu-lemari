@@ -3,6 +3,7 @@ package models
 import (
 	"fmt"
 	"time"
+
 	"github.com/google/uuid"
 	"github.com/lib/pq"
 )
@@ -10,7 +11,7 @@ import (
 // Item represents a clothing item
 type Item struct {
 	ID                uuid.UUID      `json:"id" db:"id"`
-	PartnerID         uuid.UUID      `json:"partner_id" db:"partner_id"`
+	PartnerID         string         `json:"partner_id" db:"partner_id"` // Firebase UID
 	CategoryID        uuid.UUID      `json:"category_id" db:"category_id"`
 	Name              string         `json:"name" db:"name" validate:"required,min=2,max=255"`
 	Description       *string        `json:"description,omitempty" db:"description"`
@@ -25,7 +26,7 @@ type Item struct {
 	Status            string         `json:"status" db:"status" validate:"oneof=active inactive out_of_stock"`
 	CreatedAt         time.Time      `json:"created_at" db:"created_at"`
 	UpdatedAt         time.Time      `json:"updated_at" db:"updated_at"`
-	
+
 	// Relations (will be populated when needed)
 	Partner  *UserProfile `json:"partner,omitempty"`
 	Category *Category    `json:"category,omitempty"`
@@ -70,7 +71,7 @@ type ItemFilter struct {
 	MinPrice   *float64   `json:"min_price,omitempty"`
 	MaxPrice   *float64   `json:"max_price,omitempty"`
 	Search     *string    `json:"search,omitempty"`
-	PartnerID  *uuid.UUID `json:"partner_id,omitempty"`
+	PartnerID  *string    `json:"partner_id,omitempty"` // Firebase UID
 	SortBy     *string    `json:"sort_by,omitempty" validate:"omitempty,oneof=name price created_at updated_at"`
 	SortOrder  *string    `json:"sort_order,omitempty" validate:"omitempty,oneof=asc desc"`
 }
@@ -83,10 +84,10 @@ type ItemWithDistance struct {
 
 // ItemStats represents item statistics
 type ItemStats struct {
-	TotalViews     int `json:"total_views"`
-	TotalRequests  int `json:"total_requests"`
-	TotalDonated   int `json:"total_donated"`
-	TotalRented    int `json:"total_rented"`
+	TotalViews      int `json:"total_views"`
+	TotalRequests   int `json:"total_requests"`
+	TotalDonated    int `json:"total_donated"`
+	TotalRented     int `json:"total_rented"`
 	CurrentlyRented int `json:"currently_rented"`
 }
 
