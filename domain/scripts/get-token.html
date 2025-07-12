@@ -1,0 +1,581 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Firebase Token Generator</title>
+    <script src="https://www.gstatic.com/firebasejs/9.0.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.0.0/firebase-auth-compat.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .form-group {
+            margin-bottom: 20px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+            color: #555;
+        }
+        input[type="email"], input[type="password"], input[type="text"] {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-size: 16px;
+            box-sizing: border-box;
+        }
+        .button-group {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+        button {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 5px;
+            font-size: 16px;
+            cursor: pointer;
+            flex: 1;
+            min-width: 120px;
+        }
+        .btn-primary {
+            background-color: #007bff;
+            color: white;
+        }
+        .btn-primary:hover {
+            background-color: #0056b3;
+        }
+        .btn-success {
+            background-color: #28a745;
+            color: white;
+        }
+        .btn-success:hover {
+            background-color: #1e7e34;
+        }
+        .btn-warning {
+            background-color: #ffc107;
+            color: #212529;
+        }
+        .btn-warning:hover {
+            background-color: #e0a800;
+        }
+        .btn-secondary {
+            background-color: #6c757d;
+            color: white;
+        }
+        .btn-secondary:hover {
+            background-color: #545b62;
+        }
+        .btn-danger {
+            background-color: #dc3545;
+            color: white;
+        }
+        .btn-danger:hover {
+            background-color: #c82333;
+        }
+        textarea {
+            width: 100%;
+            height: 150px;
+            padding: 12px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-family: monospace;
+            font-size: 12px;
+            resize: vertical;
+            box-sizing: border-box;
+        }
+        .status {
+            padding: 10px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+            display: none;
+        }
+        .status.success {
+            background-color: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .status.error {
+            background-color: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        .status.warning {
+            background-color: #fff3cd;
+            color: #856404;
+            border: 1px solid #ffeaa7;
+        }
+        .info {
+            background-color: #d1ecf1;
+            color: #0c5460;
+            border: 1px solid #bee5eb;
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+        }
+        .config-section {
+            background-color: #f8f9fa;
+            padding: 20px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+        }
+        .user-info {
+            background-color: #e2e3e5;
+            padding: 15px;
+            border-radius: 5px;
+            margin-top: 20px;
+            display: none;
+        }
+        .copy-btn {
+            background-color: #17a2b8;
+            color: white;
+            padding: 8px 16px;
+            border: none;
+            border-radius: 3px;
+            cursor: pointer;
+            margin-top: 10px;
+        }
+        .copy-btn:hover {
+            background-color: #138496;
+        }
+        .tabs {
+            display: flex;
+            margin-bottom: 20px;
+            border-bottom: 1px solid #ddd;
+        }
+        .tab {
+            padding: 10px 20px;
+            cursor: pointer;
+            border: none;
+            background: none;
+            border-bottom: 2px solid transparent;
+        }
+        .tab.active {
+            border-bottom-color: #007bff;
+            color: #007bff;
+            font-weight: bold;
+        }
+        .tab-content {
+            display: none;
+        }
+        .tab-content.active {
+            display: block;
+        }
+        .password-requirements {
+            font-size: 12px;
+            color: #666;
+            margin-top: 5px;
+        }
+        .error-details {
+            background-color: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 5px;
+            padding: 10px;
+            margin-top: 10px;
+            font-family: monospace;
+            font-size: 12px;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔥 Firebase Token Generator</h1>
+        
+        <div class="info">
+            <strong>Petunjuk:</strong> Masukkan konfigurasi Firebase dan credentials untuk mendapatkan ID token yang bisa digunakan di Postman.
+            <br><strong>Note:</strong> Untuk Google Sign-In, pastikan file dibuka melalui HTTP/HTTPS server, bukan file:// protocol.
+        </div>
+
+        <div class="config-section">
+            <h3>Konfigurasi Firebase</h3>
+            <div class="form-group">
+                <label for="apiKey">API Key:</label>
+                <input type="text" id="apiKey" placeholder="Masukkan Firebase API Key">
+            </div>
+            <div class="form-group">
+                <label for="authDomain">Auth Domain:</label>
+                <input type="text" id="authDomain" placeholder="your-project.firebaseapp.com">
+            </div>
+            <div class="form-group">
+                <label for="projectId">Project ID:</label>
+                <input type="text" id="projectId" placeholder="your-project-id">
+            </div>
+            <div class="form-group">
+                <label for="appId">App ID (opsional):</label>
+                <input type="text" id="appId" placeholder="1:123456789:web:abcdef123456">
+            </div>
+        </div>
+
+        <div class="tabs">
+            <button class="tab active" onclick="showTab('login')">Sign In</button>
+            <button class="tab" onclick="showTab('register')">Register</button>
+            <button class="tab" onclick="showTab('google')">Google Sign-In</button>
+        </div>
+
+        <!-- Login Tab -->
+        <div id="login" class="tab-content active">
+            <div class="form-group">
+                <label for="loginEmail">Email:</label>
+                <input type="email" id="loginEmail" placeholder="user@example.com">
+            </div>
+            
+            <div class="form-group">
+                <label for="loginPassword">Password:</label>
+                <input type="password" id="loginPassword" placeholder="password">
+            </div>
+            
+            <div class="button-group">
+                <button class="btn-primary" onclick="signIn()">Sign In & Get Token</button>
+                <button class="btn-secondary" onclick="clearToken()">Clear Token</button>
+            </div>
+        </div>
+
+        <!-- Register Tab -->
+        <div id="register" class="tab-content">
+            <div class="form-group">
+                <label for="registerEmail">Email:</label>
+                <input type="email" id="registerEmail" placeholder="newuser@example.com">
+            </div>
+            
+            <div class="form-group">
+                <label for="registerPassword">Password:</label>
+                <input type="password" id="registerPassword" placeholder="password (min. 6 karakter)">
+                <div class="password-requirements">
+                    Password minimal 6 karakter
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label for="confirmPassword">Konfirmasi Password:</label>
+                <input type="password" id="confirmPassword" placeholder="ulangi password">
+            </div>
+            
+            <div class="button-group">
+                <button class="btn-success" onclick="register()">Register & Get Token</button>
+                <button class="btn-secondary" onclick="clearToken()">Clear Token</button>
+            </div>
+        </div>
+
+        <!-- Google Sign-In Tab -->
+        <div id="google" class="tab-content">
+            <div class="info">
+                <strong>Google Sign-In:</strong> 
+                <ul>
+                    <li>Pastikan file dibuka melalui HTTP/HTTPS server (bukan file://)</li>
+                    <li>Untuk testing lokal, gunakan: <code>python -m http.server 8000</code> lalu buka <code>http://localhost:8000/scripts/get-token.html</code></li>
+                    <li>Atau gunakan Live Server di VS Code</li>
+                </ul>
+            </div>
+            
+            <div class="button-group">
+                <button class="btn-warning" onclick="signInWithGoogle()">Sign In with Google</button>
+                <button class="btn-secondary" onclick="clearToken()">Clear Token</button>
+            </div>
+        </div>
+        
+        <div id="status" class="status"></div>
+        
+        <div class="form-group">
+            <label for="token">ID Token (untuk Postman):</label>
+            <textarea id="token" placeholder="Token akan muncul di sini setelah sign in/register berhasil..." readonly></textarea>
+            <button class="copy-btn" onclick="copyToken()">Copy Token</button>
+        </div>
+
+        <div id="userInfo" class="user-info">
+            <h3>Informasi User:</h3>
+            <div id="userDetails"></div>
+        </div>
+
+        <div id="errorDetails" class="error-details">
+            <strong>Error Details:</strong>
+            <div id="errorContent"></div>
+        </div>
+    </div>
+
+    <script>
+        let firebaseApp = null;
+
+        function showTab(tabName) {
+            // Hide all tab contents
+            const tabContents = document.querySelectorAll('.tab-content');
+            tabContents.forEach(content => content.classList.remove('active'));
+            
+            // Remove active class from all tabs
+            const tabs = document.querySelectorAll('.tab');
+            tabs.forEach(tab => tab.classList.remove('active'));
+            
+            // Show selected tab content
+            document.getElementById(tabName).classList.add('active');
+            
+            // Add active class to clicked tab
+            event.target.classList.add('active');
+        }
+
+        function showStatus(message, type) {
+            const status = document.getElementById('status');
+            status.textContent = message;
+            status.className = `status ${type}`;
+            status.style.display = 'block';
+            
+            setTimeout(() => {
+                status.style.display = 'none';
+            }, 8000);
+        }
+
+        function showErrorDetails(error) {
+            const errorDetails = document.getElementById('errorDetails');
+            const errorContent = document.getElementById('errorContent');
+            
+            errorContent.innerHTML = `
+                <strong>Error Code:</strong> ${error.code}<br>
+                <strong>Error Message:</strong> ${error.message}<br>
+                <strong>Full Error:</strong> ${JSON.stringify(error, null, 2)}
+            `;
+            
+            errorDetails.style.display = 'block';
+        }
+
+        function hideErrorDetails() {
+            document.getElementById('errorDetails').style.display = 'none';
+        }
+
+        function initializeFirebase() {
+            const apiKey = document.getElementById('apiKey').value;
+            const authDomain = document.getElementById('authDomain').value;
+            const projectId = document.getElementById('projectId').value;
+            const appId = document.getElementById('appId').value;
+
+            if (!apiKey || !authDomain || !projectId) {
+                showStatus('Mohon isi API Key, Auth Domain, dan Project ID', 'error');
+                return false;
+            }
+
+            const firebaseConfig = {
+                apiKey: apiKey,
+                authDomain: authDomain,
+                projectId: projectId,
+                storageBucket: `${projectId}.appspot.com`,
+                messagingSenderId: "123456789",
+                appId: appId || "1:123456789:web:abcdef123456"
+            };
+
+            try {
+                if (firebaseApp) {
+                    firebaseApp.delete();
+                }
+                firebaseApp = firebase.initializeApp(firebaseConfig);
+                return true;
+            } catch (error) {
+                showStatus('Error initializing Firebase: ' + error.message, 'error');
+                return false;
+            }
+        }
+
+        async function signIn() {
+            const email = document.getElementById('loginEmail').value;
+            const password = document.getElementById('loginPassword').value;
+            
+            if (!email || !password) {
+                showStatus('Mohon isi email dan password', 'error');
+                return;
+            }
+
+            if (!initializeFirebase()) {
+                return;
+            }
+            
+            try {
+                hideErrorDetails();
+                showStatus('Signing in...', 'success');
+                const userCredential = await firebase.auth().signInWithEmailAndPassword(email, password);
+                const idToken = await userCredential.user.getIdToken();
+                
+                document.getElementById('token').value = idToken;
+                showUserInfo(userCredential.user);
+                showStatus('Sign in berhasil! Token telah dibuat.', 'success');
+            } catch (error) {
+                console.error('Error:', error);
+                showStatus('Error: ' + error.message, 'error');
+                showErrorDetails(error);
+            }
+        }
+
+        async function register() {
+            const email = document.getElementById('registerEmail').value;
+            const password = document.getElementById('registerPassword').value;
+            const confirmPassword = document.getElementById('confirmPassword').value;
+            
+            if (!email || !password || !confirmPassword) {
+                showStatus('Mohon isi semua field', 'error');
+                return;
+            }
+
+            if (password !== confirmPassword) {
+                showStatus('Password dan konfirmasi password tidak cocok', 'error');
+                return;
+            }
+
+            if (password.length < 6) {
+                showStatus('Password minimal 6 karakter', 'error');
+                return;
+            }
+
+            if (!initializeFirebase()) {
+                return;
+            }
+            
+            try {
+                hideErrorDetails();
+                showStatus('Creating account...', 'success');
+                const userCredential = await firebase.auth().createUserWithEmailAndPassword(email, password);
+                const idToken = await userCredential.user.getIdToken();
+                
+                document.getElementById('token').value = idToken;
+                showUserInfo(userCredential.user);
+                showStatus('Account berhasil dibuat! Token telah dibuat.', 'success');
+            } catch (error) {
+                console.error('Error:', error);
+                showStatus('Error: ' + error.message, 'error');
+                showErrorDetails(error);
+            }
+        }
+
+        async function signInWithGoogle() {
+            if (!initializeFirebase()) {
+                return;
+            }
+
+            // Check if running on file:// protocol
+            if (window.location.protocol === 'file:') {
+                showStatus('Google Sign-In tidak didukung pada file:// protocol. Gunakan HTTP server atau Live Server.', 'error');
+                return;
+            }
+
+            const provider = new firebase.auth.GoogleAuthProvider();
+            
+            try {
+                hideErrorDetails();
+                showStatus('Signing in with Google...', 'success');
+                const result = await firebase.auth().signInWithPopup(provider);
+                const idToken = await result.user.getIdToken();
+                
+                document.getElementById('token').value = idToken;
+                showUserInfo(result.user);
+                showStatus('Sign in dengan Google berhasil! Token telah dibuat.', 'success');
+            } catch (error) {
+                console.error('Error:', error);
+                showStatus('Error: ' + error.message, 'error');
+                showErrorDetails(error);
+            }
+        }
+
+        function showUserInfo(user) {
+            const userInfo = document.getElementById('userInfo');
+            const userDetails = document.getElementById('userDetails');
+            
+            userDetails.innerHTML = `
+                <p><strong>UID:</strong> ${user.uid}</p>
+                <p><strong>Email:</strong> ${user.email}</p>
+                <p><strong>Display Name:</strong> ${user.displayName || 'N/A'}</p>
+                <p><strong>Email Verified:</strong> ${user.emailVerified ? 'Yes' : 'No'}</p>
+                <p><strong>Provider:</strong> ${user.providerData[0]?.providerId || 'N/A'}</p>
+                <p><strong>Created At:</strong> ${user.metadata?.creationTime || 'N/A'}</p>
+                <p><strong>Last Sign In:</strong> ${user.metadata?.lastSignInTime || 'N/A'}</p>
+            `;
+            
+            userInfo.style.display = 'block';
+        }
+
+        function copyToken() {
+            const token = document.getElementById('token').value;
+            if (!token) {
+                showStatus('Tidak ada token untuk disalin', 'error');
+                return;
+            }
+
+            navigator.clipboard.writeText(token).then(() => {
+                showStatus('Token telah disalin ke clipboard!', 'success');
+            }).catch(() => {
+                // Fallback for older browsers
+                const textArea = document.getElementById('token');
+                textArea.select();
+                document.execCommand('copy');
+                showStatus('Token telah disalin ke clipboard!', 'success');
+            });
+        }
+
+        function clearToken() {
+            document.getElementById('token').value = '';
+            document.getElementById('userInfo').style.display = 'none';
+            hideErrorDetails();
+            showStatus('Token telah dihapus', 'success');
+        }
+
+        // Auto-refresh token when user state changes
+        function setupAuthStateListener() {
+            if (firebaseApp) {
+                firebase.auth().onAuthStateChanged(async (user) => {
+                    if (user) {
+                        const idToken = await user.getIdToken();
+                        document.getElementById('token').value = idToken;
+                        showUserInfo(user);
+                    }
+                });
+            }
+        }
+
+        // Load saved config from localStorage
+        window.onload = function() {
+            const savedConfig = localStorage.getItem('firebaseConfig');
+            if (savedConfig) {
+                const config = JSON.parse(savedConfig);
+                document.getElementById('apiKey').value = config.apiKey || '';
+                document.getElementById('authDomain').value = config.authDomain || '';
+                document.getElementById('projectId').value = config.projectId || '';
+                document.getElementById('appId').value = config.appId || '';
+            }
+
+            // Check protocol and show warning
+            if (window.location.protocol === 'file:') {
+                showStatus('Warning: Google Sign-In tidak akan berfungsi pada file:// protocol. Gunakan HTTP server.', 'warning');
+            }
+        };
+
+        // Save config to localStorage when changed
+        document.getElementById('apiKey').addEventListener('change', saveConfig);
+        document.getElementById('authDomain').addEventListener('change', saveConfig);
+        document.getElementById('projectId').addEventListener('change', saveConfig);
+        document.getElementById('appId').addEventListener('change', saveConfig);
+
+        function saveConfig() {
+            const config = {
+                apiKey: document.getElementById('apiKey').value,
+                authDomain: document.getElementById('authDomain').value,
+                projectId: document.getElementById('projectId').value,
+                appId: document.getElementById('appId').value
+            };
+            localStorage.setItem('firebaseConfig', JSON.stringify(config));
+        }
+    </script>
+</body>
+</html> 
