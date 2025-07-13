@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -17,10 +18,12 @@ import (
 	"github.com/dzuura/satu-lemari/domain/config"
 	appError "github.com/dzuura/satu-lemari/domain/error"
 	"github.com/dzuura/satu-lemari/domain/models"
+	"github.com/dzuura/satu-lemari/domain/storage"
 )
 
 type ItemService struct {
-	config *config.Config
+	config  *config.Config
+	storage *storage.SupabaseStorage
 }
 
 type SearchFilters struct {
@@ -44,7 +47,8 @@ type SearchFilters struct {
 
 func NewItemService(cfg *config.Config) *ItemService {
 	return &ItemService{
-		config: cfg,
+		config:  cfg,
+		storage: storage.NewSupabaseStorage(cfg),
 	}
 }
 
@@ -101,22 +105,98 @@ func (s *ItemService) CreateItem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req models.CreateItemRequest
-	if err := common.ParseJSONBody(r, &req); err != nil {
+	// Parse form data
+	formValues, files, err := common.ParseFormData(r)
+	if err != nil {
 		appError.WriteErrorResponse(w,
-			appError.New(appError.ErrInvalidInput, "Invalid request body"),
+			appError.New(appError.ErrInvalidInput, "Failed to parse form data"),
 			common.GenerateTraceID())
 		return
 	}
 
+	// Validate required fields
+	requiredFields := []string{"category_id", "name", "size", "type", "total_quantity", "condition"}
+	missingFields := common.ValidateRequiredFormFields(formValues, requiredFields)
+	if len(missingFields) > 0 {
+		appError.WriteErrorResponse(w,
+			appError.New(appError.ErrInvalidInput, "Missing required fields: "+strings.Join(missingFields, ", ")),
+			common.GenerateTraceID())
+		return
+	}
+
+	// Parse category_id
+	categoryID, err := uuid.Parse(common.GetFormValue(formValues, "category_id"))
+	if err != nil {
+		appError.WriteErrorResponse(w,
+			appError.New(appError.ErrInvalidInput, "Invalid category_id"),
+			common.GenerateTraceID())
+		return
+	}
+
+	// Parse total_quantity
+	totalQuantity, err := common.GetFormInt(formValues, "total_quantity")
+	if err != nil {
+		appError.WriteErrorResponse(w,
+			appError.New(appError.ErrInvalidInput, "Invalid total_quantity"),
+			common.GenerateTraceID())
+		return
+	}
+
+	// Parse price if provided
+	var price *float64
+	if priceStr := common.GetFormValue(formValues, "price"); priceStr != "" {
+		priceVal, err := common.GetFormFloat(formValues, "price")
+		if err != nil {
+			appError.WriteErrorResponse(w,
+				appError.New(appError.ErrInvalidInput, "Invalid price"),
+				common.GenerateTraceID())
+			return
+		}
+		price = &priceVal
+	}
+
+	// Upload images
+	var imageURLs []string
+	if uploadedFiles := common.GetFormFiles(files, "images"); len(uploadedFiles) > 0 {
+		uploadResults, uploadErr := s.storage.UploadMultipleFiles(uploadedFiles, "items", "images")
+		if uploadErr != nil {
+			appError.WriteErrorResponse(w, uploadErr, common.GenerateTraceID())
+			return
+		}
+
+		for _, result := range uploadResults {
+			imageURLs = append(imageURLs, result.URL)
+		}
+	}
+
+	// Create request object
+	req := &models.CreateItemRequest{
+		CategoryID:    categoryID,
+		Name:          common.GetFormValue(formValues, "name"),
+		Size:          common.GetFormValue(formValues, "size"),
+		Type:          common.GetFormValue(formValues, "type"),
+		Price:         price,
+		TotalQuantity: totalQuantity,
+		Condition:     common.GetFormValue(formValues, "condition"),
+		Images:        imageURLs,
+	}
+
+	// Set optional fields as pointers
+	if description := common.GetFormValueOrDefault(formValues, "description", ""); description != "" {
+		req.Description = &description
+	}
+	if color := common.GetFormValueOrDefault(formValues, "color", ""); color != "" {
+		req.Color = &color
+	}
+
 	// Validate request
-	if err := s.validateCreateRequest(&req); err != nil {
+	if err := s.validateCreateRequest(req); err != nil {
 		appError.WriteErrorResponse(w, err, common.GenerateTraceID())
 		return
 	}
 
 	// Create item
-	item, appErr := s.createItem(userID, &req)
+	item, appErr := s.createItem(userID, req)
 	if appErr != nil {
 		appError.WriteErrorResponse(w, appErr, common.GenerateTraceID())
 		return
@@ -153,22 +233,152 @@ func (s *ItemService) UpdateItem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req models.UpdateItemRequest
-	if err := common.ParseJSONBody(r, &req); err != nil {
+	// Parse form data
+	formValues, files, err := common.ParseFormData(r)
+	if err != nil {
 		appError.WriteErrorResponse(w,
-			appError.New(appError.ErrInvalidInput, "Invalid request body"),
+			appError.New(appError.ErrInvalidInput, "Failed to parse form data"),
 			common.GenerateTraceID())
 		return
 	}
 
+	// Parse optional fields
+	var categoryID *uuid.UUID
+	if categoryIDStr := common.GetFormValue(formValues, "category_id"); categoryIDStr != "" {
+		if parsed, err := uuid.Parse(categoryIDStr); err == nil {
+			categoryID = &parsed
+		}
+	}
+
+	var name *string
+	if nameVal := common.GetFormValue(formValues, "name"); nameVal != "" {
+		name = &nameVal
+	}
+
+	var description *string
+	if descVal := common.GetFormValue(formValues, "description"); descVal != "" {
+		description = &descVal
+	}
+
+	var size *string
+	if sizeVal := common.GetFormValue(formValues, "size"); sizeVal != "" {
+		size = &sizeVal
+	}
+
+	var color *string
+	if colorVal := common.GetFormValue(formValues, "color"); colorVal != "" {
+		color = &colorVal
+	}
+
+	var price *float64
+	if priceStr := common.GetFormValue(formValues, "price"); priceStr != "" {
+		if priceVal, err := common.GetFormFloat(formValues, "price"); err == nil {
+			price = &priceVal
+		}
+	}
+
+	var totalQuantity *int
+	if qtyStr := common.GetFormValue(formValues, "total_quantity"); qtyStr != "" {
+		if qtyVal, err := common.GetFormInt(formValues, "total_quantity"); err == nil {
+			totalQuantity = &qtyVal
+		}
+	}
+
+	var condition *string
+	if conditionVal := common.GetFormValue(formValues, "condition"); conditionVal != "" {
+		condition = &conditionVal
+	}
+
+	var status *string
+	if statusVal := common.GetFormValue(formValues, "status"); statusVal != "" {
+		status = &statusVal
+	}
+
+	// Handle image uploads
+	var imageURLs []string
+	uploadedFiles := common.GetFormFiles(files, "images")
+
+	// Check if user wants to remove all images (images field is explicitly set to empty)
+	removeImages := common.GetFormValue(formValues, "remove_images") == "true"
+
+	if len(uploadedFiles) > 0 {
+		// User uploaded new images - delete old ones first
+		if len(existing.Images) > 0 {
+			log.Printf("Deleting %d old images for item %s", len(existing.Images), itemID.String())
+			for _, imageURL := range existing.Images {
+				// Extract file path from URL
+				// URL format: https://project.supabase.co/storage/v1/object/public/items/images/filename.jpg
+				// We need to extract: images/filename.jpg
+				if strings.Contains(imageURL, "/storage/v1/object/public/items/") {
+					filePath := strings.Split(imageURL, "/storage/v1/object/public/items/")
+					if len(filePath) > 1 {
+						// Delete file from storage
+						if deleteErr := s.storage.DeleteFile("items", filePath[1]); deleteErr != nil {
+							log.Printf("Warning: Failed to delete old image %s: %v", imageURL, deleteErr)
+							// Continue with upload even if old image deletion fails
+						} else {
+							log.Printf("Successfully deleted old image: %s", imageURL)
+						}
+					}
+				}
+			}
+		}
+
+		// Upload new images
+		uploadResults, uploadErr := s.storage.UploadMultipleFiles(uploadedFiles, "items", "images")
+		if uploadErr != nil {
+			appError.WriteErrorResponse(w, uploadErr, common.GenerateTraceID())
+			return
+		}
+
+		for _, result := range uploadResults {
+			imageURLs = append(imageURLs, result.URL)
+		}
+
+		log.Printf("Successfully uploaded %d new images for item %s", len(imageURLs), itemID.String())
+	} else if removeImages && len(existing.Images) > 0 {
+		// User wants to remove all images (no new images uploaded)
+		log.Printf("Removing all %d images for item %s", len(existing.Images), itemID.String())
+		for _, imageURL := range existing.Images {
+			// Extract file path from URL
+			if strings.Contains(imageURL, "/storage/v1/object/public/items/") {
+				filePath := strings.Split(imageURL, "/storage/v1/object/public/items/")
+				if len(filePath) > 1 {
+					// Delete file from storage
+					if deleteErr := s.storage.DeleteFile("items", filePath[1]); deleteErr != nil {
+						log.Printf("Warning: Failed to delete image %s: %v", imageURL, deleteErr)
+					} else {
+						log.Printf("Successfully deleted image: %s", imageURL)
+					}
+				}
+			}
+		}
+		// Set empty array to remove all images from database
+		imageURLs = []string{}
+	}
+
+	// Create request object
+	req := &models.UpdateItemRequest{
+		CategoryID:    categoryID,
+		Name:          name,
+		Description:   description,
+		Size:          size,
+		Color:         color,
+		Price:         price,
+		TotalQuantity: totalQuantity,
+		Condition:     condition,
+		Status:        status,
+		Images:        imageURLs,
+	}
+
 	// Validate request
-	if err := s.validateUpdateRequest(&req); err != nil {
+	if err := s.validateUpdateRequest(req); err != nil {
 		appError.WriteErrorResponse(w, err, common.GenerateTraceID())
 		return
 	}
 
 	// Update item
-	updatedItem, appErr := s.updateItem(itemID.String(), &req)
+	updatedItem, appErr := s.updateItem(itemID.String(), req)
 	if appErr != nil {
 		appError.WriteErrorResponse(w, appErr, common.GenerateTraceID())
 		return
@@ -271,7 +481,7 @@ func (s *ItemService) DeleteItem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Soft delete item
+	// Delete item permanently
 	appErr = s.deleteItem(itemID.String())
 	if appErr != nil {
 		appError.WriteErrorResponse(w, appErr, common.GenerateTraceID())
@@ -351,17 +561,63 @@ func (s *ItemService) AnalyzeItemWithAI(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Analyze item with AI
-	go s.analyzeItemWithAI(itemID.String(), existing.Images)
+	// Parse form data
+	_, files, err := common.ParseFormData(r)
+	if err != nil {
+		appError.WriteErrorResponse(w,
+			appError.New(appError.ErrInvalidInput, "Failed to parse form data"),
+			common.GenerateTraceID())
+		return
+	}
 
-	common.WriteSuccessResponse(w, nil, "AI analysis started")
+	// Get images to analyze
+	var imagesToAnalyze []string
+
+	// If new images are uploaded, use them
+	if uploadedFiles := common.GetFormFiles(files, "images"); len(uploadedFiles) > 0 {
+		// Upload new images
+		uploadResults, uploadErr := s.storage.UploadMultipleFiles(uploadedFiles, "items", "images")
+		if uploadErr != nil {
+			appError.WriteErrorResponse(w, uploadErr, common.GenerateTraceID())
+			return
+		}
+
+		for _, result := range uploadResults {
+			imagesToAnalyze = append(imagesToAnalyze, result.URL)
+		}
+	} else {
+		// Use existing images from the item
+		imagesToAnalyze = existing.Images
+	}
+
+	// If no images available, return error
+	if len(imagesToAnalyze) == 0 {
+		appError.WriteErrorResponse(w,
+			appError.New(appError.ErrInvalidInput, "No images available for analysis"),
+			common.GenerateTraceID())
+		return
+	}
+
+	// Analyze item with AI
+	go s.analyzeItemWithAI(itemID.String(), imagesToAnalyze)
+
+	common.WriteSuccessResponse(w, map[string]interface{}{
+		"message":      "AI analysis started",
+		"images_count": len(imagesToAnalyze),
+	}, "AI analysis started")
 }
 
 // Helper methods
 
 func (s *ItemService) parseSearchFilters(r *http.Request) SearchFilters {
+	// Check for both 'search' and 'q' parameters for backward compatibility
+	searchParam := common.GetQueryParam(r, "search", "")
+	if searchParam == "" {
+		searchParam = common.GetQueryParam(r, "q", "")
+	}
+
 	filters := SearchFilters{
-		Search:        common.GetQueryParam(r, "search", ""),
+		Search:        searchParam,
 		CategoryID:    common.GetQueryParam(r, "category_id", ""),
 		Type:          common.GetQueryParam(r, "type", ""),
 		Status:        common.GetQueryParam(r, "status", "active"),
@@ -409,13 +665,18 @@ func (s *ItemService) parseSearchFilters(r *http.Request) SearchFilters {
 func (s *ItemService) searchItems(filters SearchFilters, pagination common.PaginationParams) ([]models.Item, int, *appError.AppError) {
 	client := &http.Client{Timeout: 10 * time.Second}
 
-	// Build query
-	query := "select=id,title,description,category_id,type,status,price,images,size,color,condition,partner_id,is_available,view_count,ai_analysis,created_at,updated_at"
+	// Build query - include all fields including price
+	query := "select=id,name,description,category_id,type,status,price,images,size,color,condition,partner_id,total_quantity,available_quantity,created_at,updated_at"
 	sqlFilters := []string{}
 
 	// Basic filters
 	if filters.Search != "" {
-		sqlFilters = append(sqlFilters, fmt.Sprintf("or=(title.ilike.%%%s%%,description.ilike.%%%s%%)", filters.Search, filters.Search))
+		// Use OR search on name and description fields like user service
+		// Sanitize search parameter
+		search := strings.TrimSpace(filters.Search)
+		if len(search) > 0 {
+			sqlFilters = append(sqlFilters, fmt.Sprintf("or=(name.ilike.*%s*,description.ilike.*%s*)", search, search))
+		}
 	}
 	if filters.CategoryID != "" {
 		sqlFilters = append(sqlFilters, fmt.Sprintf("category_id=eq.%s", filters.CategoryID))
@@ -429,17 +690,21 @@ func (s *ItemService) searchItems(filters SearchFilters, pagination common.Pagin
 	if filters.PartnerID != "" {
 		sqlFilters = append(sqlFilters, fmt.Sprintf("partner_id=eq.%s", filters.PartnerID))
 	}
-	if filters.City != "" {
-		sqlFilters = append(sqlFilters, fmt.Sprintf("partner_id=eq.%s", filters.City)) // This would need a join with users table
-	}
+	// Note: City filter would need a join with users table - skipping for now
 	if filters.Size != "" {
 		sqlFilters = append(sqlFilters, fmt.Sprintf("size=eq.%s", filters.Size))
 	}
 	if filters.Color != "" {
-		sqlFilters = append(sqlFilters, fmt.Sprintf("color.ilike.%%%s%%", filters.Color))
+		// Sanitize color parameter
+		color := strings.TrimSpace(filters.Color)
+		if len(color) > 0 {
+			// Use exact match for color instead of ILIKE to avoid issues
+			sqlFilters = append(sqlFilters, fmt.Sprintf("color=eq.%s", color))
+		}
 	}
 	if filters.OnlyAvailable {
-		sqlFilters = append(sqlFilters, "is_available=eq.true")
+		sqlFilters = append(sqlFilters, "status=eq.active")
+		sqlFilters = append(sqlFilters, "available_quantity=gt.0")
 	}
 
 	// Price range
@@ -457,21 +722,27 @@ func (s *ItemService) searchItems(filters SearchFilters, pagination common.Pagin
 
 	// Add sorting
 	if filters.SortBy != "" && filters.SortOrder != "" {
-		query = fmt.Sprintf("&order=%s.%s", filters.SortBy, filters.SortOrder)
+		query += fmt.Sprintf("&order=%s.%s", filters.SortBy, filters.SortOrder)
 	}
 
 	// Add pagination
 	offset := (pagination.Page - 1) * pagination.Limit
-	query = fmt.Sprintf("&limit=%d&offset=%d", pagination.Limit, offset)
+	query += fmt.Sprintf("&limit=%d&offset=%d", pagination.Limit, offset)
 
 	url := fmt.Sprintf("%s/rest/v1/items?%s", s.config.SupabaseURL, query)
+	log.Printf("Search items URL: %s", url)
+	log.Printf("SQL filters: %v", sqlFilters)
+	log.Printf("Search parameter: '%s'", filters.Search)
+	log.Printf("Color parameter: '%s'", filters.Color)
+	log.Printf("Final query string: %s", query)
+
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return nil, 0, appError.New(appError.ErrInternal, "Failed to create request")
 	}
 
-	req.Header.Set("apikey", s.config.SupabaseKey)
-	req.Header.Set("Authorization", "Bearer "+s.config.SupabaseKey)
+	req.Header.Set("apikey", s.config.SupabaseServiceRoleKey)
+	req.Header.Set("Authorization", "Bearer "+s.config.SupabaseServiceRoleKey)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -484,8 +755,22 @@ func (s *ItemService) searchItems(filters SearchFilters, pagination common.Pagin
 		return nil, 0, appError.New(appError.ErrInternal, "Failed to read response")
 	}
 
+	// Log response for debugging
+	log.Printf("Supabase response status: %d", resp.StatusCode)
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("Supabase response body: %s", string(body))
+	} else {
+		// Log first few characters of successful response for debugging
+		if len(body) > 200 {
+			log.Printf("Supabase response preview: %s...", string(body[:200]))
+		} else {
+			log.Printf("Supabase response: %s", string(body))
+		}
+	}
+
 	var items []models.Item
 	if err := json.Unmarshal(body, &items); err != nil {
+		log.Printf("Failed to parse response body: %s", string(body))
 		return nil, 0, appError.New(appError.ErrInternal, "Failed to parse response")
 	}
 
@@ -511,8 +796,8 @@ func (s *ItemService) getItemByID(itemID string) (*models.Item, *appError.AppErr
 		return nil, appError.New(appError.ErrInternal, "Failed to create request")
 	}
 
-	req.Header.Set("apikey", s.config.SupabaseKey)
-	req.Header.Set("Authorization", "Bearer "+s.config.SupabaseKey)
+	req.Header.Set("apikey", s.config.SupabaseServiceRoleKey)
+	req.Header.Set("Authorization", "Bearer "+s.config.SupabaseServiceRoleKey)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -539,22 +824,22 @@ func (s *ItemService) getItemByID(itemID string) (*models.Item, *appError.AppErr
 
 func (s *ItemService) createItem(partnerID string, req *models.CreateItemRequest) (*models.Item, *appError.AppError) {
 	newItem := map[string]interface{}{
-		"id":           uuid.New().String(),
-		"title":        req.Name,
-		"description":  req.Description,
-		"category_id":  req.CategoryID,
-		"type":         req.Type,
-		"status":       "active",
-		"price":        req.Price,
-		"images":       req.Images,
-		"size":         req.Size,
-		"color":        req.Color,
-		"condition":    req.Condition,
-		"partner_id":   partnerID,
-		"is_available": true,
-		"view_count":   0,
-		"created_at":   time.Now().Format(time.RFC3339),
-		"updated_at":   time.Now().Format(time.RFC3339),
+		"id":                 uuid.New().String(),
+		"name":               req.Name,
+		"description":        req.Description,
+		"category_id":        req.CategoryID,
+		"type":               req.Type,
+		"status":             "active",
+		"price":              req.Price,
+		"images":             req.Images,
+		"size":               req.Size,
+		"color":              req.Color,
+		"condition":          req.Condition,
+		"partner_id":         partnerID,
+		"total_quantity":     req.TotalQuantity,
+		"available_quantity": req.TotalQuantity, // Initially same as total
+		"created_at":         time.Now().Format(time.RFC3339),
+		"updated_at":         time.Now().Format(time.RFC3339),
 	}
 
 	jsonData, err := json.Marshal(newItem)
@@ -569,8 +854,8 @@ func (s *ItemService) createItem(partnerID string, req *models.CreateItemRequest
 		return nil, appError.New(appError.ErrInternal, "Failed to create request")
 	}
 
-	httpReq.Header.Set("apikey", s.config.SupabaseKey)
-	httpReq.Header.Set("Authorization", "Bearer "+s.config.SupabaseKey)
+	httpReq.Header.Set("apikey", s.config.SupabaseServiceRoleKey)
+	httpReq.Header.Set("Authorization", "Bearer "+s.config.SupabaseServiceRoleKey)
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Prefer", "return=representation")
 
@@ -611,7 +896,7 @@ func (s *ItemService) updateItem(itemID string, req *models.UpdateItemRequest) (
 
 	// Only include non-nil fields
 	if req.Name != nil {
-		updateData["title"] = *req.Name
+		updateData["name"] = *req.Name
 	}
 	if req.Description != nil {
 		updateData["description"] = *req.Description
@@ -652,8 +937,8 @@ func (s *ItemService) updateItem(itemID string, req *models.UpdateItemRequest) (
 		return nil, appError.New(appError.ErrInternal, "Failed to create request")
 	}
 
-	httpReq.Header.Set("apikey", s.config.SupabaseKey)
-	httpReq.Header.Set("Authorization", "Bearer "+s.config.SupabaseKey)
+	httpReq.Header.Set("apikey", s.config.SupabaseServiceRoleKey)
+	httpReq.Header.Set("Authorization", "Bearer "+s.config.SupabaseServiceRoleKey)
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Prefer", "return=representation")
 
@@ -688,26 +973,43 @@ func (s *ItemService) updateItem(itemID string, req *models.UpdateItemRequest) (
 }
 
 func (s *ItemService) deleteItem(itemID string) *appError.AppError {
-	updateData := map[string]interface{}{
-		"status":     "deleted",
-		"updated_at": time.Now().Format(time.RFC3339),
+	// First, get the item to extract image URLs
+	item, appErr := s.getItemByID(itemID)
+	if appErr != nil {
+		return appErr
 	}
 
-	jsonData, err := json.Marshal(updateData)
-	if err != nil {
-		return appError.New(appError.ErrInternal, "Failed to marshal update data")
+	// Delete images from storage if they exist
+	if len(item.Images) > 0 {
+		for _, imageURL := range item.Images {
+			// Extract file path from URL
+			// URL format: https://project.supabase.co/storage/v1/object/public/items/images/filename.jpg
+			// We need to extract: images/filename.jpg
+			if strings.Contains(imageURL, "/storage/v1/object/public/items/") {
+				filePath := strings.Split(imageURL, "/storage/v1/object/public/items/")
+				if len(filePath) > 1 {
+					// Delete file from storage
+					if deleteErr := s.storage.DeleteFile("items", filePath[1]); deleteErr != nil {
+						log.Printf("Warning: Failed to delete image %s: %v", imageURL, deleteErr)
+						// Continue with deletion even if image deletion fails
+					} else {
+						log.Printf("Successfully deleted image: %s", imageURL)
+					}
+				}
+			}
+		}
 	}
 
+	// Delete item from database
 	client := &http.Client{Timeout: 10 * time.Second}
 	url := fmt.Sprintf("%s/rest/v1/items?id=eq.%s", s.config.SupabaseURL, itemID)
-	req, err := http.NewRequest("PATCH", url, bytes.NewBuffer(jsonData))
+	req, err := http.NewRequest("DELETE", url, nil)
 	if err != nil {
 		return appError.New(appError.ErrInternal, "Failed to create request")
 	}
 
-	req.Header.Set("apikey", s.config.SupabaseKey)
-	req.Header.Set("Authorization", "Bearer "+s.config.SupabaseKey)
-	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("apikey", s.config.SupabaseServiceRoleKey)
+	req.Header.Set("Authorization", "Bearer "+s.config.SupabaseServiceRoleKey)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -715,31 +1017,21 @@ func (s *ItemService) deleteItem(itemID string) *appError.AppError {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
 		bodyBytes, _ := io.ReadAll(resp.Body)
-		log.Printf("Failed to delete item: %s", string(bodyBytes))
+		log.Printf("Failed to delete item (status %d): %s", resp.StatusCode, string(bodyBytes))
 		return appError.New(appError.ErrDatabase, "Failed to delete item in database")
 	}
+
+	log.Printf("Successfully deleted item %s and all associated images", itemID)
 
 	return nil
 }
 
-func (s *ItemService) incrementViewCount(itemID string) {
-	updateData := map[string]interface{}{
-		"view_count": "view_count  1",
-		"updated_at": time.Now().Format(time.RFC3339),
-	}
-
-	jsonData, _ := json.Marshal(updateData)
-	client := &http.Client{Timeout: 5 * time.Second}
-	url := fmt.Sprintf("%s/rest/v1/items?id=eq.%s", s.config.SupabaseURL, itemID)
-	req, _ := http.NewRequest("PATCH", url, bytes.NewBuffer(jsonData))
-
-	req.Header.Set("apikey", s.config.SupabaseKey)
-	req.Header.Set("Authorization", "Bearer "+s.config.SupabaseKey)
-	req.Header.Set("Content-Type", "application/json")
-
-	client.Do(req)
+func (s *ItemService) incrementViewCount(_ string) {
+	// TODO: Add view_count column to database schema if needed
+	// For now, this function is disabled as view_count column doesn't exist
+	log.Printf("View count increment disabled - column not in schema")
 }
 
 func (s *ItemService) itemHasPendingRequests(itemID string) (bool, *appError.AppError) {
@@ -751,8 +1043,8 @@ func (s *ItemService) itemHasPendingRequests(itemID string) (bool, *appError.App
 		return false, appError.New(appError.ErrInternal, "Failed to create request")
 	}
 
-	req.Header.Set("apikey", s.config.SupabaseKey)
-	req.Header.Set("Authorization", "Bearer "+s.config.SupabaseKey)
+	req.Header.Set("apikey", s.config.SupabaseServiceRoleKey)
+	req.Header.Set("Authorization", "Bearer "+s.config.SupabaseServiceRoleKey)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -768,37 +1060,10 @@ func (s *ItemService) itemHasPendingRequests(itemID string) (bool, *appError.App
 	return count > 0, nil
 }
 
-func (s *ItemService) analyzeItemWithAI(itemID string, images []string) {
-	if !s.config.EnableAIFeatures || len(images) == 0 {
-		return
-	}
-
-	// This is a simplified AI analysis - in production you would call OpenAI Vision API
-	analysisData := map[string]interface{}{
-		"ai_analysis": map[string]interface{}{
-			"analyzed_at": time.Now().Format(time.RFC3339),
-			"confidence":  0.85,
-			"tags":        []string{"casual", "cotton", "good_condition"},
-			"description": "AI-generated description based on image analysis",
-		},
-		"updated_at": time.Now().Format(time.RFC3339),
-	}
-
-	jsonData, _ := json.Marshal(analysisData)
-	client := &http.Client{Timeout: 10 * time.Second}
-	url := fmt.Sprintf("%s/rest/v1/items?id=eq.%s", s.config.SupabaseURL, itemID)
-	req, _ := http.NewRequest("PATCH", url, bytes.NewBuffer(jsonData))
-
-	req.Header.Set("apikey", s.config.SupabaseKey)
-	req.Header.Set("Authorization", "Bearer "+s.config.SupabaseKey)
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, _ := client.Do(req)
-	if resp != nil {
-		resp.Body.Close()
-	}
-
-	log.Printf("AI analysis completed for item %s", itemID)
+func (s *ItemService) analyzeItemWithAI(_ string, _ []string) {
+	// TODO: Add ai_analysis column to database schema if needed
+	// For now, this function is disabled as ai_analysis column doesn't exist
+	log.Printf("AI analysis disabled - column not in schema")
 }
 
 func (s *ItemService) getCount(client *http.Client, url string) (int, error) {
@@ -807,8 +1072,8 @@ func (s *ItemService) getCount(client *http.Client, url string) (int, error) {
 		return 0, err
 	}
 
-	req.Header.Set("apikey", s.config.SupabaseKey)
-	req.Header.Set("Authorization", "Bearer "+s.config.SupabaseKey)
+	req.Header.Set("apikey", s.config.SupabaseServiceRoleKey)
+	req.Header.Set("Authorization", "Bearer "+s.config.SupabaseServiceRoleKey)
 
 	resp, err := client.Do(req)
 	if err != nil {

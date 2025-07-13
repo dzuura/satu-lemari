@@ -5,27 +5,26 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/lib/pq"
 )
 
 // Item represents a clothing item
 type Item struct {
-	ID                uuid.UUID      `json:"id" db:"id"`
-	PartnerID         string         `json:"partner_id" db:"partner_id"` // Firebase UID
-	CategoryID        uuid.UUID      `json:"category_id" db:"category_id"`
-	Name              string         `json:"name" db:"name" validate:"required,min=2,max=255"`
-	Description       *string        `json:"description,omitempty" db:"description"`
-	Size              string         `json:"size" db:"size" validate:"required"`
-	Color             *string        `json:"color,omitempty" db:"color"`
-	Type              string         `json:"type" db:"type" validate:"required,oneof=donation rental"`
-	Price             *float64       `json:"price,omitempty" db:"price"`
-	TotalQuantity     int            `json:"total_quantity" db:"total_quantity" validate:"min=1"`
-	AvailableQuantity int            `json:"available_quantity" db:"available_quantity"`
-	Condition         string         `json:"condition" db:"condition" validate:"oneof=excellent good fair"`
-	Images            pq.StringArray `json:"images" db:"images"`
-	Status            string         `json:"status" db:"status" validate:"oneof=active inactive out_of_stock"`
-	CreatedAt         time.Time      `json:"created_at" db:"created_at"`
-	UpdatedAt         time.Time      `json:"updated_at" db:"updated_at"`
+	ID                uuid.UUID `json:"id" db:"id"`
+	PartnerID         string    `json:"partner_id" db:"partner_id"` // Firebase UID
+	CategoryID        uuid.UUID `json:"category_id" db:"category_id"`
+	Name              string    `json:"name" db:"name" validate:"required,min=2,max=255"`
+	Description       *string   `json:"description,omitempty" db:"description"`
+	Size              string    `json:"size" db:"size" validate:"required"`
+	Color             *string   `json:"color,omitempty" db:"color"`
+	Type              string    `json:"type" db:"type" validate:"required,oneof=donation rental"`
+	Price             *float64  `json:"price,omitempty" db:"price"`
+	TotalQuantity     int       `json:"total_quantity" db:"total_quantity" validate:"min=1"`
+	AvailableQuantity int       `json:"available_quantity" db:"available_quantity"`
+	Condition         string    `json:"condition" db:"condition" validate:"oneof=excellent good fair"`
+	Images            []string  `json:"images" db:"images"`
+	Status            string    `json:"status" db:"status" validate:"oneof=active inactive out_of_stock"`
+	CreatedAt         time.Time `json:"created_at" db:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at" db:"updated_at"`
 
 	// Relations (will be populated when needed)
 	Partner  *UserProfile `json:"partner,omitempty"`

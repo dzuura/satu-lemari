@@ -216,8 +216,10 @@ func (s *Server) registerRoutes(api *mux.Router) {
 	// Public category routes (GET only)
 	s.categoryService.RegisterPublicRoutes(publicRoutes)
 
-	// Public item routes
-	s.itemService.RegisterRoutes(publicRoutes)
+	// Public item routes (GET only)
+	publicRoutes.HandleFunc("/items", s.itemService.GetItems).Methods("GET")
+	publicRoutes.HandleFunc("/items/search", s.itemService.SearchItems).Methods("GET")
+	publicRoutes.HandleFunc("/items/{item_id}", s.itemService.GetItem).Methods("GET")
 
 	// Public user routes (only search and profile viewing)
 	publicRoutes.HandleFunc("/users/{user_id}/profile", s.userService.GetUserProfile).Methods("GET")
@@ -244,13 +246,13 @@ func (s *Server) registerRoutes(api *mux.Router) {
 	protectedRoutes.HandleFunc("/users/me", s.userService.UpdateMyProfile).Methods("PUT")
 	protectedRoutes.HandleFunc("/users/dashboard", s.userService.GetDashboard).Methods("GET")
 
-	// Protected item routes
+	// Protected item routes - order matters for routing
 	protectedRoutes.HandleFunc("/items", s.itemService.CreateItem).Methods("POST")
-	protectedRoutes.HandleFunc("/items/mine", s.itemService.GetMyItems).Methods("GET")
-	protectedRoutes.HandleFunc("/items/{item_id}", s.itemService.UpdateItem).Methods("PUT")
+	protectedRoutes.HandleFunc("/my-items", s.itemService.GetMyItems).Methods("GET")
 	protectedRoutes.HandleFunc("/items/{item_id}/status", s.itemService.UpdateItemStatus).Methods("PATCH")
-	protectedRoutes.HandleFunc("/items/{item_id}", s.itemService.DeleteItem).Methods("DELETE")
 	protectedRoutes.HandleFunc("/items/{item_id}/ai-analyze", s.itemService.AnalyzeItemWithAI).Methods("POST")
+	protectedRoutes.HandleFunc("/items/{item_id}", s.itemService.UpdateItem).Methods("PUT")
+	protectedRoutes.HandleFunc("/items/{item_id}", s.itemService.DeleteItem).Methods("DELETE")
 
 	// Admin only routes
 	adminRoutes := api.PathPrefix("").Subrouter()
