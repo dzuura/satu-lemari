@@ -5,20 +5,20 @@ import (
 	"net/http"
 	"strings"
 
-	"firebase.google.com/go/v4/auth"
+	"github.com/dzuura/satu-lemari/domain/auth"
 	"github.com/dzuura/satu-lemari/domain/common"
 	appError "github.com/dzuura/satu-lemari/domain/error"
 )
 
 // AuthMiddleware handles JWT token validation
 type AuthMiddleware struct {
-	client *auth.Client
+	jwtService *auth.JWTService
 }
 
 // NewAuthMiddleware creates a new auth middleware
-func NewAuthMiddleware(client *auth.Client) *AuthMiddleware {
+func NewAuthMiddleware(jwtService *auth.JWTService) *AuthMiddleware {
 	return &AuthMiddleware{
-		client: client,
+		jwtService: jwtService,
 	}
 }
 
@@ -31,45 +31,30 @@ func (a *AuthMiddleware) RequireAuth(next http.Handler) http.Handler {
 			appError.WriteErrorResponse(w, appError.ErrInvalidCredentials, common.GenerateTraceID())
 			return
 		}
-		
+
 		// Check Bearer token format
 		parts := strings.Split(authHeader, " ")
 		if len(parts) != 2 || parts[0] != "Bearer" {
 			appError.WriteErrorResponse(w, appError.New(appError.ErrTokenInvalid, "Invalid token format"), common.GenerateTraceID())
 			return
 		}
-		
+
 		token := parts[1]
-		
-		// Verify token with Firebase
-		idToken, err := a.client.VerifyIDToken(context.Background(), token)
+
+		// Validate JWT token
+		claims, err := a.jwtService.ValidateToken(token)
 		if err != nil {
 			appError.WriteErrorResponse(w, appError.New(appError.ErrTokenInvalid, "Invalid or expired token"), common.GenerateTraceID())
 			return
 		}
-		
-		// Get user info from Firebase
-		user, err := a.client.GetUser(context.Background(), idToken.UID)
-		if err != nil {
-			appError.WriteErrorResponse(w, appError.New(appError.ErrUnauthorized, "User not found"), common.GenerateTraceID())
-			return
-		}
-		
-		// TODO: Get user role from database
-		// For now, we'll extract it from custom claims or default based on email domain
-		role := "user" // default role
-		if claims, ok := idToken.Claims["role"]; ok {
-			if r, ok := claims.(string); ok {
-				role = r
-			}
-		}
-		
-		// Set user context
-		ctx := context.WithValue(r.Context(), "user_id", idToken.UID)
-		ctx = context.WithValue(ctx, "user_email", user.Email)
-		ctx = context.WithValue(ctx, "user_role", role)
-		ctx = context.WithValue(ctx, "token_claims", idToken.Claims)
-		
+
+		// Set user context using proper context keys
+		ctx := context.WithValue(r.Context(), common.UserIDKey(), claims.UserID)
+		ctx = context.WithValue(ctx, common.UserEmailKey(), claims.Email)
+		ctx = context.WithValue(ctx, common.UserRoleKey(), claims.Role)
+		ctx = context.WithValue(ctx, common.UsernameKey(), claims.Username)
+		ctx = context.WithValue(ctx, common.AuthenticatedKey(), true)
+
 		// Continue with authenticated request
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
@@ -80,12 +65,12 @@ func (a *AuthMiddleware) RequireRole(allowedRoles ...string) func(http.Handler) 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// Get user role from context (should be set by RequireAuth middleware)
-			role, ok := r.Context().Value("user_role").(string)
+			role, ok := r.Context().Value(common.UserRoleKey()).(string)
 			if !ok {
 				appError.WriteErrorResponse(w, appError.ErrAccessDenied, common.GenerateTraceID())
 				return
 			}
-			
+
 			// Check if user role is allowed
 			roleAllowed := false
 			for _, allowedRole := range allowedRoles {
@@ -94,12 +79,12 @@ func (a *AuthMiddleware) RequireRole(allowedRoles ...string) func(http.Handler) 
 					break
 				}
 			}
-			
+
 			if !roleAllowed {
 				appError.WriteErrorResponse(w, appError.New(appError.ErrForbidden, "Insufficient permissions"), common.GenerateTraceID())
 				return
 			}
-			
+
 			next.ServeHTTP(w, r)
 		})
 	}
@@ -130,7 +115,7 @@ func (a *AuthMiddleware) OptionalAuth(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		
+
 		// Check Bearer token format
 		parts := strings.Split(authHeader, " ")
 		if len(parts) != 2 || parts[0] != "Bearer" {
@@ -138,40 +123,24 @@ func (a *AuthMiddleware) OptionalAuth(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		
+
 		token := parts[1]
-		
-		// Verify token with Firebase
-		idToken, err := a.client.VerifyIDToken(context.Background(), token)
+
+		// Validate JWT token
+		claims, err := a.jwtService.ValidateToken(token)
 		if err != nil {
 			// Invalid token, continue without authentication
 			next.ServeHTTP(w, r)
 			return
 		}
-		
-		// Get user info from Firebase
-		user, err := a.client.GetUser(context.Background(), idToken.UID)
-		if err != nil {
-			// User not found, continue without authentication
-			next.ServeHTTP(w, r)
-			return
-		}
-		
-		// Get user role
-		role := "user" // default role
-		if claims, ok := idToken.Claims["role"]; ok {
-			if r, ok := claims.(string); ok {
-				role = r
-			}
-		}
-		
-		// Set user context
-		ctx := context.WithValue(r.Context(), "user_id", idToken.UID)
-		ctx = context.WithValue(ctx, "user_email", user.Email)
-		ctx = context.WithValue(ctx, "user_role", role)
-		ctx = context.WithValue(ctx, "token_claims", idToken.Claims)
-		ctx = context.WithValue(ctx, "authenticated", true)
-		
+
+		// Set user context using proper context keys
+		ctx := context.WithValue(r.Context(), common.UserIDKey(), claims.UserID)
+		ctx = context.WithValue(ctx, common.UserEmailKey(), claims.Email)
+		ctx = context.WithValue(ctx, common.UserRoleKey(), claims.Role)
+		ctx = context.WithValue(ctx, common.UsernameKey(), claims.Username)
+		ctx = context.WithValue(ctx, common.AuthenticatedKey(), true)
+
 		// Continue with authenticated request
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
@@ -179,33 +148,33 @@ func (a *AuthMiddleware) OptionalAuth(next http.Handler) http.Handler {
 
 // GetUserFromContext extracts user info from request context
 func GetUserFromContext(r *http.Request) (userID, email, role string, authenticated bool) {
-	userID, _ = r.Context().Value("user_id").(string)
-	email, _ = r.Context().Value("user_email").(string)
-	role, _ = r.Context().Value("user_role").(string)
-	authenticated, _ = r.Context().Value("authenticated").(bool)
+	userID, _ = r.Context().Value(common.UserIDKey()).(string)
+	email, _ = r.Context().Value(common.UserEmailKey()).(string)
+	role, _ = r.Context().Value(common.UserRoleKey()).(string)
+	authenticated, _ = r.Context().Value(common.AuthenticatedKey()).(bool)
 	return
 }
 
 // IsAuthenticated checks if request is authenticated
 func IsAuthenticated(r *http.Request) bool {
-	_, exists := r.Context().Value("user_id").(string)
+	_, exists := r.Context().Value(common.UserIDKey()).(string)
 	return exists
 }
 
 // IsPartner checks if authenticated user is a partner
 func IsPartner(r *http.Request) bool {
-	role, _ := r.Context().Value("user_role").(string)
+	role, _ := r.Context().Value(common.UserRoleKey()).(string)
 	return role == "partner" || role == "admin"
 }
 
 // IsAdmin checks if authenticated user is an admin
 func IsAdmin(r *http.Request) bool {
-	role, _ := r.Context().Value("user_role").(string)
+	role, _ := r.Context().Value(common.UserRoleKey()).(string)
 	return role == "admin"
 }
 
 // IsUser checks if authenticated user is a regular user
 func IsUser(r *http.Request) bool {
-	role, _ := r.Context().Value("user_role").(string)
+	role, _ := r.Context().Value(common.UserRoleKey()).(string)
 	return role == "user"
 }

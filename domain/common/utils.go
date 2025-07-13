@@ -14,6 +14,28 @@ import (
 	"github.com/gorilla/mux"
 )
 
+// Context key types to avoid collisions
+type contextKey string
+
+const (
+	userIDKey        contextKey = "user_id"
+	userRoleKey      contextKey = "user_role"
+	userEmailKey     contextKey = "user_email"
+	usernameKey      contextKey = "username"
+	requestIDKey     contextKey = "request_id"
+	tokenClaimsKey   contextKey = "token_claims"
+	authenticatedKey contextKey = "authenticated"
+)
+
+// Context key getters
+func UserIDKey() contextKey        { return userIDKey }
+func UserRoleKey() contextKey      { return userRoleKey }
+func UserEmailKey() contextKey     { return userEmailKey }
+func UsernameKey() contextKey      { return usernameKey }
+func RequestIDKey() contextKey     { return requestIDKey }
+func TokenClaimsKey() contextKey   { return tokenClaimsKey }
+func AuthenticatedKey() contextKey { return authenticatedKey }
+
 // GetQueryParam returns query parameter value or default
 func GetQueryParam(r *http.Request, key, defaultValue string) string {
 	value := r.URL.Query().Get(key)
@@ -224,36 +246,36 @@ func StringSliceToInterface(slice []string) []interface{} {
 
 // GetUserIDFromContext gets user ID from request context
 func GetUserIDFromContext(r *http.Request) (string, bool) {
-	userID, ok := r.Context().Value("user_id").(string)
+	userID, ok := r.Context().Value(userIDKey).(string)
 	return userID, ok
 }
 
 // GetUserRoleFromContext gets user role from request context
 func GetUserRoleFromContext(r *http.Request) (string, bool) {
-	role, ok := r.Context().Value("user_role").(string)
+	role, ok := r.Context().Value(userRoleKey).(string)
 	return role, ok
 }
 
 // GetUserEmailFromContext gets user email from request context
 func GetUserEmailFromContext(r *http.Request) (string, bool) {
-	email, ok := r.Context().Value("user_email").(string)
+	email, ok := r.Context().Value(userEmailKey).(string)
 	return email, ok
 }
 
 // GetUsernameFromContext gets username from request context
 func GetUsernameFromContext(r *http.Request) (string, bool) {
-	username, ok := r.Context().Value("username").(string)
+	username, ok := r.Context().Value(usernameKey).(string)
 	return username, ok
 }
 
 // SetRequestID sets request ID in context
 func SetRequestID(ctx context.Context, requestID string) context.Context {
-	return context.WithValue(ctx, "request_id", requestID)
+	return context.WithValue(ctx, requestIDKey, requestID)
 }
 
 // GetRequestIDFromContext extracts request ID from context
 func GetRequestIDFromContext(ctx context.Context) (string, bool) {
-	requestID, ok := ctx.Value("request_id").(string)
+	requestID, ok := ctx.Value(requestIDKey).(string)
 	return requestID, ok
 }
 
@@ -366,4 +388,67 @@ func ValidateStruct(s interface{}) error {
 	// For now, just return nil (no validation)
 	// This will be implemented properly when error package is fixed
 	return nil
+}
+
+// ParseCoordinate parses a coordinate string to float64 with proper validation
+func ParseCoordinate(value string) (float64, error) {
+	// Trim whitespace
+	value = strings.TrimSpace(value)
+
+	// Check if empty
+	if value == "" {
+		return 0, fmt.Errorf("coordinate cannot be empty")
+	}
+
+	// Parse as float64
+	coord, err := strconv.ParseFloat(value, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid coordinate format: %s", value)
+	}
+
+	return coord, nil
+}
+
+// ValidateLatitude validates latitude value
+func ValidateLatitude(latitude float64) error {
+	if latitude < -90 || latitude > 90 {
+		return fmt.Errorf("latitude must be between -90 and 90 degrees")
+	}
+	return nil
+}
+
+// ValidateLongitude validates longitude value
+func ValidateLongitude(longitude float64) error {
+	if longitude < -180 || longitude > 180 {
+		return fmt.Errorf("longitude must be between -180 and 180 degrees")
+	}
+	return nil
+}
+
+// ParseAndValidateLatitude parses and validates latitude
+func ParseAndValidateLatitude(value string) (float64, error) {
+	coord, err := ParseCoordinate(value)
+	if err != nil {
+		return 0, err
+	}
+
+	if err := ValidateLatitude(coord); err != nil {
+		return 0, err
+	}
+
+	return coord, nil
+}
+
+// ParseAndValidateLongitude parses and validates longitude
+func ParseAndValidateLongitude(value string) (float64, error) {
+	coord, err := ParseCoordinate(value)
+	if err != nil {
+		return 0, err
+	}
+
+	if err := ValidateLongitude(coord); err != nil {
+		return 0, err
+	}
+
+	return coord, nil
 }

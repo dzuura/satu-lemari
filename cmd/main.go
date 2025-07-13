@@ -242,7 +242,6 @@ func (s *Server) registerRoutes(api *mux.Router) {
 	// Protected user routes
 	protectedRoutes.HandleFunc("/users/me", s.userService.GetMyProfile).Methods("GET")
 	protectedRoutes.HandleFunc("/users/me", s.userService.UpdateMyProfile).Methods("PUT")
-	protectedRoutes.HandleFunc("/users/me/location", s.userService.UpdateMyLocation).Methods("PUT")
 	protectedRoutes.HandleFunc("/users/dashboard", s.userService.GetDashboard).Methods("GET")
 
 	// Protected item routes

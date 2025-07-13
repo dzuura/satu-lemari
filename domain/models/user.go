@@ -9,15 +9,15 @@ type User struct {
 	ID                  string    `json:"id" db:"id"` // Firebase UID
 	Email               string    `json:"email" db:"email" validate:"required,email"`
 	Username            string    `json:"username" db:"username" validate:"required,min=3,max=30"`
-	FullName            *string   `json:"full_name,omitempty" db:"full_name"`
+	FullName            *string   `json:"full_name" db:"full_name"`
 	Role                string    `json:"role" db:"role" validate:"required,oneof=user partner admin"`
-	Phone               *string   `json:"phone,omitempty" db:"phone"`
-	Address             *string   `json:"address,omitempty" db:"address"`
-	City                *string   `json:"city,omitempty" db:"city"`
+	Phone               *string   `json:"phone" db:"phone"`
+	Address             *string   `json:"address" db:"address"`
+	City                *string   `json:"city" db:"city"`
 	Latitude            *float64  `json:"latitude,omitempty" db:"latitude"`
 	Longitude           *float64  `json:"longitude,omitempty" db:"longitude"`
-	Photo               *string   `json:"photo,omitempty" db:"photo"`
-	Description         *string   `json:"description,omitempty" db:"description"`
+	Photo               *string   `json:"photo" db:"photo"`
+	Description         *string   `json:"description" db:"description"`
 	IsActive            bool      `json:"is_active" db:"is_active"`
 	WeeklyDonationQuota int       `json:"weekly_donation_quota" db:"weekly_donation_quota"`
 	WeeklyDonationUsed  int       `json:"weekly_donation_used" db:"weekly_donation_used"`
@@ -35,34 +35,29 @@ type CreateUserRequest struct {
 	Phone    string `json:"phone,omitempty"`
 }
 
-// UpdateUserRequest represents request to update user profile
-type UpdateUserRequest struct {
-	FullName    *string  `json:"full_name,omitempty"`
-	Phone       *string  `json:"phone,omitempty"`
-	Address     *string  `json:"address,omitempty"`
-	City        *string  `json:"city,omitempty"`
-	Latitude    *float64 `json:"latitude,omitempty"`
-	Longitude   *float64 `json:"longitude,omitempty"`
-	Photo       *string  `json:"photo,omitempty"`
-	Description *string  `json:"description,omitempty"`
-}
-
-// UpdateLocationRequest represents request to update user location
-type UpdateLocationRequest struct {
-	Latitude  float64 `json:"latitude" validate:"required,min=-90,max=90"`
-	Longitude float64 `json:"longitude" validate:"required,min=-180,max=180"`
-	Address   string  `json:"address,omitempty"`
-	City      string  `json:"city,omitempty"`
+// UpdateUserProfileRequest represents request to update user profile with all fields
+type UpdateUserProfileRequest struct {
+	Username    *string  `json:"username"`
+	FullName    *string  `json:"full_name"`
+	Phone       *string  `json:"phone"`
+	Address     *string  `json:"address"`
+	City        *string  `json:"city"`
+	Latitude    *float64 `json:"latitude"`
+	Longitude   *float64 `json:"longitude"`
+	Description *string  `json:"description"`
+	// Photo will be handled separately as file upload
 }
 
 // UserProfile represents public user profile information
 type UserProfile struct {
 	ID          string    `json:"id"` // Firebase UID
 	Username    string    `json:"username"`
-	FullName    *string   `json:"full_name,omitempty"`
-	Photo       *string   `json:"photo,omitempty"`
-	City        *string   `json:"city,omitempty"`
-	Description *string   `json:"description,omitempty"`
+	FullName    *string   `json:"full_name"`
+	Phone       *string   `json:"phone"`
+	Address     *string   `json:"address"`
+	City        *string   `json:"city"`
+	Photo       *string   `json:"photo"`
+	Description *string   `json:"description"`
 	Role        string    `json:"role"`
 	CreatedAt   time.Time `json:"created_at"`
 }
@@ -156,8 +151,10 @@ func (u *User) ToProfile() UserProfile {
 		ID:          u.ID,
 		Username:    u.Username,
 		FullName:    u.FullName,
-		Photo:       u.Photo,
+		Phone:       u.Phone,
+		Address:     u.Address,
 		City:        u.City,
+		Photo:       u.Photo,
 		Description: u.Description,
 		Role:        u.Role,
 		CreatedAt:   u.CreatedAt,

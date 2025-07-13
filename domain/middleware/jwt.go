@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"context"
+	"log"
 	"net/http"
 	"strings"
 
@@ -48,12 +49,14 @@ func (j *JWTAuthMiddleware) RequireAuth(next http.Handler) http.Handler {
 			return
 		}
 
-		// Set user context
-		ctx := context.WithValue(r.Context(), "user_id", claims.UserID)
-		ctx = context.WithValue(ctx, "user_email", claims.Email)
-		ctx = context.WithValue(ctx, "user_role", claims.Role)
-		ctx = context.WithValue(ctx, "username", claims.Username)
-		ctx = context.WithValue(ctx, "authenticated", true)
+		log.Printf("JWT Token validated - UserID: %s, Email: %s, Role: %s", claims.UserID, claims.Email, claims.Role)
+
+		// Set user context using proper context keys
+		ctx := context.WithValue(r.Context(), common.UserIDKey(), claims.UserID)
+		ctx = context.WithValue(ctx, common.UserEmailKey(), claims.Email)
+		ctx = context.WithValue(ctx, common.UserRoleKey(), claims.Role)
+		ctx = context.WithValue(ctx, common.UsernameKey(), claims.Username)
+		ctx = context.WithValue(ctx, common.AuthenticatedKey(), true)
 
 		// Continue with authenticated request
 		next.ServeHTTP(w, r.WithContext(ctx))
@@ -65,7 +68,7 @@ func (j *JWTAuthMiddleware) RequireRole(allowedRoles ...string) func(http.Handle
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// Get user role from context (should be set by RequireAuth middleware)
-			role, ok := r.Context().Value("user_role").(string)
+			role, ok := r.Context().Value(common.UserRoleKey()).(string)
 			if !ok {
 				appError.WriteErrorResponse(w, appError.ErrAccessDenied, common.GenerateTraceID())
 				return
@@ -134,12 +137,12 @@ func (j *JWTAuthMiddleware) OptionalAuth(next http.Handler) http.Handler {
 			return
 		}
 
-		// Set user context
-		ctx := context.WithValue(r.Context(), "user_id", claims.UserID)
-		ctx = context.WithValue(ctx, "user_email", claims.Email)
-		ctx = context.WithValue(ctx, "user_role", claims.Role)
-		ctx = context.WithValue(ctx, "username", claims.Username)
-		ctx = context.WithValue(ctx, "authenticated", true)
+		// Set user context using proper context keys
+		ctx := context.WithValue(r.Context(), common.UserIDKey(), claims.UserID)
+		ctx = context.WithValue(ctx, common.UserEmailKey(), claims.Email)
+		ctx = context.WithValue(ctx, common.UserRoleKey(), claims.Role)
+		ctx = context.WithValue(ctx, common.UsernameKey(), claims.Username)
+		ctx = context.WithValue(ctx, common.AuthenticatedKey(), true)
 
 		// Continue with authenticated request
 		next.ServeHTTP(w, r.WithContext(ctx))

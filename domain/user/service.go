@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/gorilla/mux"
 
 	"github.com/dzuura/satu-lemari/domain/common"
@@ -20,12 +19,14 @@ import (
 )
 
 type UserService struct {
-	config *config.Config
+	config        *config.Config
+	fileUploadSvc *common.FileUploadService
 }
 
 func NewUserService(cfg *config.Config) *UserService {
 	return &UserService{
-		config: cfg,
+		config:        cfg,
+		fileUploadSvc: common.NewFileUploadService(cfg.SupabaseURL, cfg.SupabaseServiceRoleKey),
 	}
 }
 
@@ -33,7 +34,6 @@ func (s *UserService) RegisterRoutes(r *mux.Router) {
 	// Protected routes - require authentication
 	r.HandleFunc("/users/me", s.GetMyProfile).Methods("GET")
 	r.HandleFunc("/users/me", s.UpdateMyProfile).Methods("PUT")
-	r.HandleFunc("/users/me/location", s.UpdateMyLocation).Methods("PUT")
 	r.HandleFunc("/users/dashboard", s.GetDashboard).Methods("GET")
 
 	// Public routes
@@ -50,8 +50,11 @@ func (s *UserService) GetMyProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	log.Printf("GetMyProfile called with userID: %s", userID)
+
 	user, err := s.getUserByID(userID)
 	if err != nil {
+		log.Printf("Error getting user by ID: %v", err)
 		appError.WriteErrorResponse(w, err, common.GenerateTraceID())
 		return
 	}
@@ -68,76 +71,106 @@ func (s *UserService) UpdateMyProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req models.UpdateUserRequest
-	if err := common.ParseJSONBody(r, &req); err != nil {
+	// Parse multipart form (max 10MB)
+	err := r.ParseMultipartForm(10 << 20)
+	if err != nil {
 		appError.WriteErrorResponse(w,
-			appError.New(appError.ErrInvalidInput, "Invalid request body"),
+			appError.New(appError.ErrInvalidInput, "Failed to parse form data"),
 			common.GenerateTraceID())
 		return
 	}
 
+	// Create update request from form data
+	req := &models.UpdateUserProfileRequest{}
+
+	// Extract form fields directly
+	if username := r.FormValue("username"); username != "" {
+		req.Username = &username
+	}
+	if fullName := r.FormValue("full_name"); fullName != "" {
+		req.FullName = &fullName
+	}
+	if phone := r.FormValue("phone"); phone != "" {
+		req.Phone = &phone
+	}
+	if address := r.FormValue("address"); address != "" {
+		req.Address = &address
+	}
+	if city := r.FormValue("city"); city != "" {
+		req.City = &city
+	}
+	if description := r.FormValue("description"); description != "" {
+		req.Description = &description
+	}
+
+	// Handle numeric fields
+	if latitudeStr := r.FormValue("latitude"); latitudeStr != "" {
+		log.Printf("Parsing latitude: %s", latitudeStr)
+		if latitude, err := common.ParseAndValidateLatitude(latitudeStr); err == nil {
+			req.Latitude = &latitude
+			log.Printf("Successfully parsed latitude: %f", latitude)
+		} else {
+			log.Printf("Failed to parse latitude '%s': %v", latitudeStr, err)
+			appError.WriteErrorResponse(w,
+				appError.New(appError.ErrInvalidInput, fmt.Sprintf("Invalid latitude: %v", err)),
+				common.GenerateTraceID())
+			return
+		}
+	}
+	if longitudeStr := r.FormValue("longitude"); longitudeStr != "" {
+		log.Printf("Parsing longitude: %s", longitudeStr)
+		if longitude, err := common.ParseAndValidateLongitude(longitudeStr); err == nil {
+			req.Longitude = &longitude
+			log.Printf("Successfully parsed longitude: %f", longitude)
+		} else {
+			log.Printf("Failed to parse longitude '%s': %v", longitudeStr, err)
+			appError.WriteErrorResponse(w,
+				appError.New(appError.ErrInvalidInput, fmt.Sprintf("Invalid longitude: %v", err)),
+				common.GenerateTraceID())
+			return
+		}
+	}
+
 	// Validate input
-	if err := s.validateUpdateRequest(&req); err != nil {
+	if err := s.validateUpdateProfileRequest(req); err != nil {
 		appError.WriteErrorResponse(w, err, common.GenerateTraceID())
 		return
 	}
 
+	// Handle photo upload if provided
+	var photoURL *string
+	if file, header, err := r.FormFile("photo"); err == nil {
+		defer file.Close()
+
+		// Validate image file
+		if err := common.ValidateImageFile(header); err != nil {
+			appError.WriteErrorResponse(w,
+				appError.New(appError.ErrInvalidInput, err.Error()),
+				common.GenerateTraceID())
+			return
+		}
+
+		// Upload photo to Supabase Storage
+		uploadedURL, err := s.fileUploadSvc.UploadUserPhoto(userID, header)
+		if err != nil {
+			log.Printf("Failed to upload photo: %v", err)
+			appError.WriteErrorResponse(w,
+				appError.New(appError.ErrInternal, "Failed to upload photo"),
+				common.GenerateTraceID())
+			return
+		}
+
+		photoURL = &uploadedURL
+	}
+
 	// Update user in database
-	updatedUser, err := s.updateUser(userID, &req)
-	if err != nil {
-		appError.WriteErrorResponse(w, err, common.GenerateTraceID())
+	updatedUser, appErr := s.updateUserProfile(userID, req, photoURL)
+	if appErr != nil {
+		appError.WriteErrorResponse(w, appErr, common.GenerateTraceID())
 		return
 	}
 
 	common.WriteSuccessResponse(w, updatedUser, "Profile updated successfully")
-}
-
-func (s *UserService) UpdateMyLocation(w http.ResponseWriter, r *http.Request) {
-	userID, ok := common.GetUserIDFromContext(r)
-	if !ok {
-		appError.WriteErrorResponse(w,
-			appError.New(appError.ErrUnauthorized, "Unauthorized"),
-			common.GenerateTraceID())
-		return
-	}
-
-	var req models.UpdateLocationRequest
-	if err := common.ParseJSONBody(r, &req); err != nil {
-		appError.WriteErrorResponse(w,
-			appError.New(appError.ErrInvalidInput, "Invalid request body"),
-			common.GenerateTraceID())
-		return
-	}
-
-	// Validate location
-	if req.Latitude < -90 || req.Latitude > 90 {
-		appError.WriteErrorResponse(w,
-			appError.New(appError.ErrInvalidInput, "Invalid latitude"),
-			common.GenerateTraceID())
-		return
-	}
-	if req.Longitude < -180 || req.Longitude > 180 {
-		appError.WriteErrorResponse(w,
-			appError.New(appError.ErrInvalidInput, "Invalid longitude"),
-			common.GenerateTraceID())
-		return
-	}
-
-	// Update location
-	updateReq := &models.UpdateUserRequest{
-		Latitude:  &req.Latitude,
-		Longitude: &req.Longitude,
-		Address:   &req.Address,
-		City:      &req.City,
-	}
-
-	updatedUser, err := s.updateUser(userID, updateReq)
-	if err != nil {
-		appError.WriteErrorResponse(w, err, common.GenerateTraceID())
-		return
-	}
-
-	common.WriteSuccessResponse(w, updatedUser, "Location updated successfully")
 }
 
 func (s *UserService) GetDashboard(w http.ResponseWriter, r *http.Request) {
@@ -195,16 +228,17 @@ func (s *UserService) GetDashboard(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *UserService) GetUserProfile(w http.ResponseWriter, r *http.Request) {
-	userIDStr := common.GetPathParam(r, "user_id")
-	userID, err := uuid.Parse(userIDStr)
-	if err != nil {
+	userID := common.GetPathParam(r, "user_id")
+
+	// Validate user ID format (Firebase UID format)
+	if userID == "" || len(userID) < 10 {
 		appError.WriteErrorResponse(w,
 			appError.New(appError.ErrInvalidInput, "Invalid user ID"),
 			common.GenerateTraceID())
 		return
 	}
 
-	user, appErr := s.getUserByID(userID.String())
+	user, appErr := s.getUserByID(userID)
 	if appErr != nil {
 		appError.WriteErrorResponse(w, appErr, common.GenerateTraceID())
 		return
@@ -237,13 +271,17 @@ func (s *UserService) getUserByID(userID string) (*models.User, *appError.AppErr
 	client := &http.Client{Timeout: 10 * time.Second}
 
 	url := fmt.Sprintf("%s/rest/v1/users?id=eq.%s&select=*", s.config.SupabaseURL, userID)
+	log.Printf("Getting user by ID: %s", userID)
+	log.Printf("URL: %s", url)
+
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return nil, appError.New(appError.ErrInternal, "Failed to create request")
 	}
 
-	req.Header.Set("apikey", s.config.SupabaseKey)
-	req.Header.Set("Authorization", "Bearer "+s.config.SupabaseKey)
+	// Use service role key to bypass RLS for user queries
+	req.Header.Set("apikey", s.config.SupabaseServiceRoleKey)
+	req.Header.Set("Authorization", "Bearer "+s.config.SupabaseServiceRoleKey)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -252,6 +290,8 @@ func (s *UserService) getUserByID(userID string) (*models.User, *appError.AppErr
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		log.Printf("Database query failed with status %d: %s", resp.StatusCode, string(bodyBytes))
 		return nil, appError.New(appError.ErrDatabase, "Database query failed")
 	}
 
@@ -260,94 +300,20 @@ func (s *UserService) getUserByID(userID string) (*models.User, *appError.AppErr
 		return nil, appError.New(appError.ErrInternal, "Failed to read response")
 	}
 
+	log.Printf("Database response: %s", string(body))
+
 	var users []models.User
 	if err := json.Unmarshal(body, &users); err != nil {
 		return nil, appError.New(appError.ErrInternal, "Failed to parse response")
 	}
+
+	log.Printf("Found %d users", len(users))
 
 	if len(users) == 0 {
 		return nil, appError.ErrUserNotFound
 	}
 
 	return &users[0], nil
-}
-
-func (s *UserService) updateUser(userID string, req *models.UpdateUserRequest) (*models.User, *appError.AppError) {
-	updateData := map[string]interface{}{
-		"updated_at": time.Now().Format(time.RFC3339),
-	}
-
-	// Only include non-nil fields
-	if req.FullName != nil {
-		updateData["full_name"] = *req.FullName
-	}
-	if req.Phone != nil {
-		updateData["phone"] = *req.Phone
-	}
-	if req.Address != nil {
-		updateData["address"] = *req.Address
-	}
-	if req.City != nil {
-		updateData["city"] = *req.City
-	}
-	if req.Latitude != nil {
-		updateData["latitude"] = *req.Latitude
-	}
-	if req.Longitude != nil {
-		updateData["longitude"] = *req.Longitude
-	}
-	if req.Photo != nil {
-		updateData["photo"] = *req.Photo
-	}
-	if req.Description != nil {
-		updateData["description"] = *req.Description
-	}
-
-	jsonData, err := json.Marshal(updateData)
-	if err != nil {
-		return nil, appError.New(appError.ErrInternal, "Failed to marshal update data")
-	}
-
-	client := &http.Client{Timeout: 10 * time.Second}
-	url := fmt.Sprintf("%s/rest/v1/users?id=eq.%s", s.config.SupabaseURL, userID)
-	httpReq, err := http.NewRequest("PATCH", url, bytes.NewBuffer(jsonData))
-	if err != nil {
-		return nil, appError.New(appError.ErrInternal, "Failed to create request")
-	}
-
-	httpReq.Header.Set("apikey", s.config.SupabaseKey)
-	httpReq.Header.Set("Authorization", "Bearer "+s.config.SupabaseKey)
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Prefer", "return=representation")
-
-	resp, err := client.Do(httpReq)
-	if err != nil {
-		return nil, appError.New(appError.ErrDatabase, "Failed to update user")
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		bodyBytes, _ := io.ReadAll(resp.Body)
-		log.Printf("Failed to update user: %s", string(bodyBytes))
-		return nil, appError.New(appError.ErrDatabase, "Failed to update user in database")
-	}
-
-	// Parse updated user
-	var updatedUsers []models.User
-	bodyBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, appError.New(appError.ErrInternal, "Failed to read response")
-	}
-
-	if err := json.Unmarshal(bodyBytes, &updatedUsers); err != nil {
-		return nil, appError.New(appError.ErrInternal, "Failed to parse updated user")
-	}
-
-	if len(updatedUsers) == 0 {
-		return nil, appError.New(appError.ErrInternal, "No user returned from update")
-	}
-
-	return &updatedUsers[0], nil
 }
 
 func (s *UserService) getUserStats(userID, role string) (*models.UserStats, *appError.AppError) {
@@ -399,8 +365,9 @@ func (s *UserService) getCount(client *http.Client, url string) (int, error) {
 		return 0, err
 	}
 
-	req.Header.Set("apikey", s.config.SupabaseKey)
-	req.Header.Set("Authorization", "Bearer "+s.config.SupabaseKey)
+	// Use service role key to bypass RLS for count queries
+	req.Header.Set("apikey", s.config.SupabaseServiceRoleKey)
+	req.Header.Set("Authorization", "Bearer "+s.config.SupabaseServiceRoleKey)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -438,8 +405,9 @@ func (s *UserService) getRecentRequests(userID string, limit int) ([]models.Requ
 		return nil, err
 	}
 
-	req.Header.Set("apikey", s.config.SupabaseKey)
-	req.Header.Set("Authorization", "Bearer "+s.config.SupabaseKey)
+	// Use service role key to bypass RLS
+	req.Header.Set("apikey", s.config.SupabaseServiceRoleKey)
+	req.Header.Set("Authorization", "Bearer "+s.config.SupabaseServiceRoleKey)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -471,8 +439,9 @@ func (s *UserService) getRecentItems(userID string, limit int) ([]models.Item, e
 		return nil, err
 	}
 
-	req.Header.Set("apikey", s.config.SupabaseKey)
-	req.Header.Set("Authorization", "Bearer "+s.config.SupabaseKey)
+	// Use service role key to bypass RLS
+	req.Header.Set("apikey", s.config.SupabaseServiceRoleKey)
+	req.Header.Set("Authorization", "Bearer "+s.config.SupabaseServiceRoleKey)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -537,8 +506,9 @@ func (s *UserService) searchUsers(search, role, city string, pagination common.P
 		return nil, 0, appError.New(appError.ErrInternal, "Failed to create request")
 	}
 
-	req.Header.Set("apikey", s.config.SupabaseKey)
-	req.Header.Set("Authorization", "Bearer "+s.config.SupabaseKey)
+	// Use service role key to bypass RLS
+	req.Header.Set("apikey", s.config.SupabaseServiceRoleKey)
+	req.Header.Set("Authorization", "Bearer "+s.config.SupabaseServiceRoleKey)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -587,8 +557,9 @@ func (s *UserService) searchUsers(search, role, city string, pagination common.P
 		return users, total, nil
 	}
 
-	countReq.Header.Set("apikey", s.config.SupabaseKey)
-	countReq.Header.Set("Authorization", "Bearer "+s.config.SupabaseKey)
+	// Use service role key to bypass RLS
+	countReq.Header.Set("apikey", s.config.SupabaseServiceRoleKey)
+	countReq.Header.Set("Authorization", "Bearer "+s.config.SupabaseServiceRoleKey)
 
 	countResp, err := client.Do(countReq)
 	if err != nil {
@@ -616,12 +587,116 @@ func (s *UserService) searchUsers(search, role, city string, pagination common.P
 	return users, total, nil
 }
 
-func (s *UserService) validateUpdateRequest(req *models.UpdateUserRequest) *appError.AppError {
+func (s *UserService) validateUpdateProfileRequest(req *models.UpdateUserProfileRequest) *appError.AppError {
+	// Validate username if provided
+	if req.Username != nil && *req.Username != "" {
+		if len(*req.Username) < 3 || len(*req.Username) > 30 {
+			return appError.New(appError.ErrInvalidInput, "Username must be between 3 and 30 characters")
+		}
+	}
+
+	// Validate phone number if provided
 	if req.Phone != nil && *req.Phone != "" {
 		if !common.IsValidPhoneNumber(*req.Phone) {
 			return appError.New(appError.ErrInvalidInput, "Invalid phone number format")
 		}
 	}
 
+	// Validate latitude if provided
+	if req.Latitude != nil {
+		if err := common.ValidateLatitude(*req.Latitude); err != nil {
+			return appError.New(appError.ErrInvalidInput, err.Error())
+		}
+	}
+
+	// Validate longitude if provided
+	if req.Longitude != nil {
+		if err := common.ValidateLongitude(*req.Longitude); err != nil {
+			return appError.New(appError.ErrInvalidInput, err.Error())
+		}
+	}
+
 	return nil
+}
+
+func (s *UserService) updateUserProfile(userID string, req *models.UpdateUserProfileRequest, photoURL *string) (*models.User, *appError.AppError) {
+	updateData := map[string]interface{}{
+		"updated_at": time.Now().Format(time.RFC3339),
+	}
+
+	// Only include non-nil fields
+	if req.Username != nil {
+		updateData["username"] = *req.Username
+	}
+	if req.FullName != nil {
+		updateData["full_name"] = *req.FullName
+	}
+	if req.Phone != nil {
+		updateData["phone"] = *req.Phone
+	}
+	if req.Address != nil {
+		updateData["address"] = *req.Address
+	}
+	if req.City != nil {
+		updateData["city"] = *req.City
+	}
+	if req.Latitude != nil {
+		updateData["latitude"] = *req.Latitude
+	}
+	if req.Longitude != nil {
+		updateData["longitude"] = *req.Longitude
+	}
+	if req.Description != nil {
+		updateData["description"] = *req.Description
+	}
+	if photoURL != nil {
+		updateData["photo"] = *photoURL
+	}
+
+	jsonData, err := json.Marshal(updateData)
+	if err != nil {
+		return nil, appError.New(appError.ErrInternal, "Failed to marshal update data")
+	}
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	url := fmt.Sprintf("%s/rest/v1/users?id=eq.%s", s.config.SupabaseURL, userID)
+	httpReq, err := http.NewRequest("PATCH", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return nil, appError.New(appError.ErrInternal, "Failed to create request")
+	}
+
+	// Use service role key to bypass RLS for user updates
+	httpReq.Header.Set("apikey", s.config.SupabaseServiceRoleKey)
+	httpReq.Header.Set("Authorization", "Bearer "+s.config.SupabaseServiceRoleKey)
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Prefer", "return=representation")
+
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		return nil, appError.New(appError.ErrDatabase, "Failed to update user")
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		log.Printf("Failed to update user: %s", string(bodyBytes))
+		return nil, appError.New(appError.ErrDatabase, "Failed to update user in database")
+	}
+
+	// Parse updated user
+	var updatedUsers []models.User
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, appError.New(appError.ErrInternal, "Failed to read response")
+	}
+
+	if err := json.Unmarshal(bodyBytes, &updatedUsers); err != nil {
+		return nil, appError.New(appError.ErrInternal, "Failed to parse updated user")
+	}
+
+	if len(updatedUsers) == 0 {
+		return nil, appError.New(appError.ErrInternal, "No user returned from update")
+	}
+
+	return &updatedUsers[0], nil
 }

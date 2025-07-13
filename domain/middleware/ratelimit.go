@@ -65,7 +65,7 @@ func (rl *RateLimiter) RateLimitMiddleware(next http.Handler) http.Handler {
 // getClientID returns a unique identifier for the client
 func (rl *RateLimiter) getClientID(r *http.Request) string {
 	// Try to get user ID from context first (for authenticated requests)
-	userID, ok := r.Context().Value("user_id").(string)
+	userID, ok := r.Context().Value(common.UserIDKey()).(string)
 	if ok && userID != "" {
 		return "user:" + userID
 	}
