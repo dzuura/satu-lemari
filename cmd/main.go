@@ -213,8 +213,8 @@ func (s *Server) registerRoutes(api *mux.Router) {
 	// Auth routes - only verify auth is public
 	publicRoutes.HandleFunc("/auth/verify", s.authService.VerifyAuth).Methods("POST")
 
-	// Public category routes
-	s.categoryService.RegisterRoutes(publicRoutes)
+	// Public category routes (GET only)
+	s.categoryService.RegisterPublicRoutes(publicRoutes)
 
 	// Public item routes
 	s.itemService.RegisterRoutes(publicRoutes)
@@ -232,8 +232,8 @@ func (s *Server) registerRoutes(api *mux.Router) {
 	protectedRoutes := api.PathPrefix("").Subrouter()
 
 	// JWT Authentication middleware
-	jwtMiddleware := middleware.NewJWTAuthMiddleware(s.authService.GetJWTService())
-	protectedRoutes.Use(jwtMiddleware.RequireAuth)
+	authMiddleware := middleware.NewAuthMiddleware(s.authService.GetJWTService())
+	protectedRoutes.Use(authMiddleware.RequireAuth)
 
 	// Protected auth routes
 	protectedRoutes.HandleFunc("/auth/refresh", s.authService.RefreshToken).Methods("POST")
@@ -256,13 +256,11 @@ func (s *Server) registerRoutes(api *mux.Router) {
 	adminRoutes := api.PathPrefix("").Subrouter()
 
 	// JWT Authentication + Admin authorization middleware
-	adminRoutes.Use(jwtMiddleware.RequireAuth)
-	adminRoutes.Use(jwtMiddleware.RequireAdmin)
+	adminRoutes.Use(authMiddleware.RequireAuth)
+	adminRoutes.Use(authMiddleware.RequireAdmin)
 
 	// Admin category routes
-	adminRoutes.HandleFunc("/categories", s.categoryService.CreateCategory).Methods("POST")
-	adminRoutes.HandleFunc("/categories/{category_id}", s.categoryService.UpdateCategory).Methods("PUT")
-	adminRoutes.HandleFunc("/categories/{category_id}", s.categoryService.DeleteCategory).Methods("DELETE")
+	s.categoryService.RegisterAdminRoutes(adminRoutes)
 }
 
 func (s *Server) healthCheck(w http.ResponseWriter, r *http.Request) {

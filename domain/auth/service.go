@@ -169,8 +169,8 @@ func (s *AuthService) VerifyAuth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Generate JWT token
-	jwtToken, jwtErr := s.jwt.GenerateToken(uid, user.Email, role, userProfile.Username)
+	// Generate JWT token with role from database, not platform-based role
+	jwtToken, jwtErr := s.jwt.GenerateToken(uid, user.Email, userProfile.Role, userProfile.Username)
 	if jwtErr != nil {
 		log.Printf("Error generating JWT token: %v", jwtErr)
 		appError.WriteErrorResponse(w,

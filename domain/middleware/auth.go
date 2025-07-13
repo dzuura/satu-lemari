@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"context"
+	"log"
 	"net/http"
 	"strings"
 
@@ -48,6 +49,10 @@ func (a *AuthMiddleware) RequireAuth(next http.Handler) http.Handler {
 			return
 		}
 
+		// Log token claims for debugging
+		log.Printf("JWT Token validated - UserID: %s, Email: %s, Role: %s, Username: %s",
+			claims.UserID, claims.Email, claims.Role, claims.Username)
+
 		// Set user context using proper context keys
 		ctx := context.WithValue(r.Context(), common.UserIDKey(), claims.UserID)
 		ctx = context.WithValue(ctx, common.UserEmailKey(), claims.Email)
@@ -67,9 +72,13 @@ func (a *AuthMiddleware) RequireRole(allowedRoles ...string) func(http.Handler) 
 			// Get user role from context (should be set by RequireAuth middleware)
 			role, ok := r.Context().Value(common.UserRoleKey()).(string)
 			if !ok {
+				log.Printf("Role not found in context")
 				appError.WriteErrorResponse(w, appError.ErrAccessDenied, common.GenerateTraceID())
 				return
 			}
+
+			// Log role check for debugging
+			log.Printf("Role check - User role: %s, Allowed roles: %v", role, allowedRoles)
 
 			// Check if user role is allowed
 			roleAllowed := false
@@ -81,10 +90,12 @@ func (a *AuthMiddleware) RequireRole(allowedRoles ...string) func(http.Handler) 
 			}
 
 			if !roleAllowed {
+				log.Printf("Access denied - User role: %s not in allowed roles: %v", role, allowedRoles)
 				appError.WriteErrorResponse(w, appError.New(appError.ErrForbidden, "Insufficient permissions"), common.GenerateTraceID())
 				return
 			}
 
+			log.Printf("Access granted - User role: %s is allowed", role)
 			next.ServeHTTP(w, r)
 		})
 	}

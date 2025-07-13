@@ -31,10 +31,22 @@ func NewCategoryService(cfg *config.Config) *CategoryService {
 	}
 }
 
-// RegisterRoutes registers category routes
+// RegisterRoutes registers all category routes (for backward compatibility)
 func (s *CategoryService) RegisterRoutes(r *mux.Router) {
+	// Public routes (no authentication required)
+	s.RegisterPublicRoutes(r)
+	// Admin routes (require authentication and admin role)
+	s.RegisterAdminRoutes(r)
+}
+
+// RegisterPublicRoutes registers public category routes (no authentication required)
+func (s *CategoryService) RegisterPublicRoutes(r *mux.Router) {
 	r.HandleFunc("/categories", s.GetCategories).Methods("GET")
 	r.HandleFunc("/categories/{id}", s.GetCategory).Methods("GET")
+}
+
+// RegisterAdminRoutes registers admin category routes (require authentication and admin role)
+func (s *CategoryService) RegisterAdminRoutes(r *mux.Router) {
 	r.HandleFunc("/categories", s.CreateCategory).Methods("POST")
 	r.HandleFunc("/categories/{id}", s.UpdateCategory).Methods("PUT")
 	r.HandleFunc("/categories/{id}", s.DeleteCategory).Methods("DELETE")
@@ -115,8 +127,8 @@ func (s *CategoryService) CreateCategory(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Write response
-	common.WriteSuccessResponse(w, category, "Category created successfully")
+	// Write response with 201 Created status
+	common.WriteCreatedResponse(w, category, "Category created successfully")
 }
 
 // UpdateCategory handles PUT /categories/{id}
@@ -209,45 +221,48 @@ func (s *CategoryService) DeleteCategory(w http.ResponseWriter, r *http.Request)
 func (s *CategoryService) searchCategories(search, isActive string, pagination common.PaginationParams) ([]models.Category, int, *appError.AppError) {
 	client := &http.Client{Timeout: 10 * time.Second}
 
-	// Build query
-	query := "select=*"
+	// Build query parameters
+	params := []string{"select=*"}
 
-	// Add filters
-	var filters []string
-
+	// Add search filter with proper URL encoding
 	if search != "" {
-		filters = append(filters, fmt.Sprintf("name.ilike.%%%s%%", search))
+		// Supabase REST API expects: name=ilike.*search*
+		searchFilter := fmt.Sprintf("name=ilike.*%s*", search)
+		params = append(params, searchFilter)
 	}
 
+	// Add active filter
 	if isActive != "" {
 		switch isActive {
 		case "true":
-			filters = append(filters, "is_active.eq.true")
+			params = append(params, "is_active=eq.true")
 		case "false":
-			filters = append(filters, "is_active.eq.false")
+			params = append(params, "is_active=eq.false")
 		}
 	}
 
-	// Add filters to query
-	for _, filter := range filters {
-		query += "&" + filter
-	}
-
 	// Add sorting
-	query += "&order=name.asc"
+	params = append(params, "order=name.asc")
 
 	// Add pagination
 	offset := (pagination.Page - 1) * pagination.Limit
-	query += fmt.Sprintf("&limit=%d&offset=%d", pagination.Limit, offset)
+	params = append(params, fmt.Sprintf("limit=%d", pagination.Limit))
+	params = append(params, fmt.Sprintf("offset=%d", offset))
 
-	url := fmt.Sprintf("%s/rest/v1/categories?%s", s.config.SupabaseURL, query)
+	// Build URL with proper query string
+	queryString := strings.Join(params, "&")
+	url := fmt.Sprintf("%s/rest/v1/categories?%s", s.config.SupabaseURL, queryString)
+
+	log.Printf("Search categories URL: %s", url)
+
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return nil, 0, appError.New(appError.ErrInternal, "Failed to create request")
 	}
 
-	req.Header.Set("apikey", s.config.SupabaseKey)
-	req.Header.Set("Authorization", "Bearer "+s.config.SupabaseKey)
+	// Use service role key for database queries
+	req.Header.Set("apikey", s.config.SupabaseServiceRoleKey)
+	req.Header.Set("Authorization", "Bearer "+s.config.SupabaseServiceRoleKey)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -255,23 +270,42 @@ func (s *CategoryService) searchCategories(search, isActive string, pagination c
 	}
 	defer resp.Body.Close()
 
+	// Check response status
+	if resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		log.Printf("Database query failed with status %d: %s", resp.StatusCode, string(bodyBytes))
+		return nil, 0, appError.New(appError.ErrDatabase, "Database query failed")
+	}
+
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, 0, appError.New(appError.ErrInternal, "Failed to read response")
 	}
 
+	log.Printf("Database response: %s", string(body))
+
 	var categories []models.Category
 	if err := json.Unmarshal(body, &categories); err != nil {
+		log.Printf("Failed to parse categories: %v", err)
 		return nil, 0, appError.New(appError.ErrInternal, "Failed to parse response")
 	}
 
-	// Get total count
-	countURL := fmt.Sprintf("%s/rest/v1/categories?select=count", s.config.SupabaseURL)
-	if len(filters) > 0 {
-		for _, filter := range filters {
-			countURL += "&" + filter
+	// Get total count with same filters
+	countParams := []string{"select=count"}
+	if search != "" {
+		countParams = append(countParams, fmt.Sprintf("name=ilike.*%s*", search))
+	}
+	if isActive != "" {
+		switch isActive {
+		case "true":
+			countParams = append(countParams, "is_active=eq.true")
+		case "false":
+			countParams = append(countParams, "is_active=eq.false")
 		}
 	}
+
+	countQueryString := strings.Join(countParams, "&")
+	countURL := fmt.Sprintf("%s/rest/v1/categories?%s", s.config.SupabaseURL, countQueryString)
 
 	total, _ := s.getCount(client, countURL)
 
@@ -287,8 +321,9 @@ func (s *CategoryService) getCategoryByID(categoryID string) (*models.Category, 
 		return nil, appError.New(appError.ErrInternal, "Failed to create request")
 	}
 
-	req.Header.Set("apikey", s.config.SupabaseKey)
-	req.Header.Set("Authorization", "Bearer "+s.config.SupabaseKey)
+	// Use service role key to bypass RLS
+	req.Header.Set("apikey", s.config.SupabaseServiceRoleKey)
+	req.Header.Set("Authorization", "Bearer "+s.config.SupabaseServiceRoleKey)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -336,8 +371,8 @@ func (s *CategoryService) createCategory(req *models.CreateCategoryRequest) (*mo
 		return nil, appError.New(appError.ErrInternal, "Failed to create request")
 	}
 
-	httpReq.Header.Set("apikey", s.config.SupabaseKey)
-	httpReq.Header.Set("Authorization", "Bearer "+s.config.SupabaseKey)
+	httpReq.Header.Set("apikey", s.config.SupabaseServiceRoleKey)
+	httpReq.Header.Set("Authorization", "Bearer "+s.config.SupabaseServiceRoleKey)
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Prefer", "return=representation")
 
@@ -347,7 +382,7 @@ func (s *CategoryService) createCategory(req *models.CreateCategoryRequest) (*mo
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusCreated {
+	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(resp.Body)
 		log.Printf("Failed to create category: %s", string(bodyBytes))
 		return nil, appError.New(appError.ErrDatabase, "Failed to create category in database")
@@ -402,8 +437,8 @@ func (s *CategoryService) updateCategory(categoryID string, req *models.UpdateCa
 		return nil, appError.New(appError.ErrInternal, "Failed to create request")
 	}
 
-	httpReq.Header.Set("apikey", s.config.SupabaseKey)
-	httpReq.Header.Set("Authorization", "Bearer "+s.config.SupabaseKey)
+	httpReq.Header.Set("apikey", s.config.SupabaseServiceRoleKey)
+	httpReq.Header.Set("Authorization", "Bearer "+s.config.SupabaseServiceRoleKey)
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Prefer", "return=representation")
 
@@ -450,24 +485,35 @@ func (s *CategoryService) deleteCategory(categoryID string) *appError.AppError {
 
 	client := &http.Client{Timeout: 10 * time.Second}
 	url := fmt.Sprintf("%s/rest/v1/categories?id=eq.%s", s.config.SupabaseURL, categoryID)
+
+	log.Printf("Deleting category with URL: %s", url)
+	log.Printf("Delete data: %s", string(jsonData))
+
 	httpReq, err := http.NewRequest("PATCH", url, bytes.NewBuffer(jsonData))
 	if err != nil {
 		return appError.New(appError.ErrInternal, "Failed to create request")
 	}
 
-	httpReq.Header.Set("apikey", s.config.SupabaseKey)
-	httpReq.Header.Set("Authorization", "Bearer "+s.config.SupabaseKey)
+	httpReq.Header.Set("apikey", s.config.SupabaseServiceRoleKey)
+	httpReq.Header.Set("Authorization", "Bearer "+s.config.SupabaseServiceRoleKey)
 	httpReq.Header.Set("Content-Type", "application/json")
 
 	resp, err := client.Do(httpReq)
 	if err != nil {
+		log.Printf("Failed to delete category - network error: %v", err)
 		return appError.New(appError.ErrDatabase, "Failed to delete category")
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		bodyBytes, _ := io.ReadAll(resp.Body)
-		log.Printf("Failed to delete category: %s", string(bodyBytes))
+	bodyBytes, _ := io.ReadAll(resp.Body)
+	log.Printf("Delete category response status: %d", resp.StatusCode)
+	if len(bodyBytes) > 0 {
+		log.Printf("Delete category response body: %s", string(bodyBytes))
+	} else {
+		log.Printf("Delete category response body: (empty)")
+	}
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
 		return appError.New(appError.ErrDatabase, "Failed to delete category in database")
 	}
 
@@ -483,8 +529,9 @@ func (s *CategoryService) categoryNameExists(name string) (bool, *appError.AppEr
 		return false, appError.New(appError.ErrInternal, "Failed to create request")
 	}
 
-	req.Header.Set("apikey", s.config.SupabaseKey)
-	req.Header.Set("Authorization", "Bearer "+s.config.SupabaseKey)
+	// Use service role key to bypass RLS
+	req.Header.Set("apikey", s.config.SupabaseServiceRoleKey)
+	req.Header.Set("Authorization", "Bearer "+s.config.SupabaseServiceRoleKey)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -514,8 +561,9 @@ func (s *CategoryService) categoryHasItems(categoryID string) (bool, *appError.A
 		return false, appError.New(appError.ErrInternal, "Failed to create request")
 	}
 
-	req.Header.Set("apikey", s.config.SupabaseKey)
-	req.Header.Set("Authorization", "Bearer "+s.config.SupabaseKey)
+	// Use service role key to bypass RLS
+	req.Header.Set("apikey", s.config.SupabaseServiceRoleKey)
+	req.Header.Set("Authorization", "Bearer "+s.config.SupabaseServiceRoleKey)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -542,8 +590,9 @@ func (s *CategoryService) getCount(client *http.Client, url string) (int, error)
 		return 0, err
 	}
 
-	req.Header.Set("apikey", s.config.SupabaseKey)
-	req.Header.Set("Authorization", "Bearer "+s.config.SupabaseKey)
+	// Use service role key for count queries
+	req.Header.Set("apikey", s.config.SupabaseServiceRoleKey)
+	req.Header.Set("Authorization", "Bearer "+s.config.SupabaseServiceRoleKey)
 
 	resp, err := client.Do(req)
 	if err != nil {
