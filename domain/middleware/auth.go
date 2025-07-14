@@ -32,23 +32,23 @@ func (a *AuthMiddleware) RequireAuth(next http.Handler) http.Handler {
 			appError.WriteErrorResponse(w, appError.ErrInvalidCredentials, common.GenerateTraceID())
 			return
 		}
-
+		
 		// Check Bearer token format
 		parts := strings.Split(authHeader, " ")
 		if len(parts) != 2 || parts[0] != "Bearer" {
 			appError.WriteErrorResponse(w, appError.New(appError.ErrTokenInvalid, "Invalid token format"), common.GenerateTraceID())
 			return
 		}
-
+		
 		token := parts[1]
-
+		
 		// Validate JWT token
 		claims, err := a.jwtService.ValidateToken(token)
 		if err != nil {
 			appError.WriteErrorResponse(w, appError.New(appError.ErrTokenInvalid, "Invalid or expired token"), common.GenerateTraceID())
 			return
 		}
-
+		
 		// Log token claims for debugging
 		log.Printf("JWT Token validated - UserID: %s, Email: %s, Role: %s, Username: %s",
 			claims.UserID, claims.Email, claims.Role, claims.Username)
@@ -59,7 +59,7 @@ func (a *AuthMiddleware) RequireAuth(next http.Handler) http.Handler {
 		ctx = context.WithValue(ctx, common.UserRoleKey(), claims.Role)
 		ctx = context.WithValue(ctx, common.UsernameKey(), claims.Username)
 		ctx = context.WithValue(ctx, common.AuthenticatedKey(), true)
-
+		
 		// Continue with authenticated request
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
@@ -79,7 +79,7 @@ func (a *AuthMiddleware) RequireRole(allowedRoles ...string) func(http.Handler) 
 
 			// Log role check for debugging
 			log.Printf("Role check - User role: %s, Allowed roles: %v", role, allowedRoles)
-
+			
 			// Check if user role is allowed
 			roleAllowed := false
 			for _, allowedRole := range allowedRoles {
@@ -88,13 +88,13 @@ func (a *AuthMiddleware) RequireRole(allowedRoles ...string) func(http.Handler) 
 					break
 				}
 			}
-
+			
 			if !roleAllowed {
 				log.Printf("Access denied - User role: %s not in allowed roles: %v", role, allowedRoles)
 				appError.WriteErrorResponse(w, appError.New(appError.ErrForbidden, "Insufficient permissions"), common.GenerateTraceID())
 				return
 			}
-
+			
 			log.Printf("Access granted - User role: %s is allowed", role)
 			next.ServeHTTP(w, r)
 		})
@@ -126,7 +126,7 @@ func (a *AuthMiddleware) OptionalAuth(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-
+		
 		// Check Bearer token format
 		parts := strings.Split(authHeader, " ")
 		if len(parts) != 2 || parts[0] != "Bearer" {
@@ -134,9 +134,9 @@ func (a *AuthMiddleware) OptionalAuth(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-
+		
 		token := parts[1]
-
+		
 		// Validate JWT token
 		claims, err := a.jwtService.ValidateToken(token)
 		if err != nil {
@@ -144,14 +144,14 @@ func (a *AuthMiddleware) OptionalAuth(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-
+		
 		// Set user context using proper context keys
 		ctx := context.WithValue(r.Context(), common.UserIDKey(), claims.UserID)
 		ctx = context.WithValue(ctx, common.UserEmailKey(), claims.Email)
 		ctx = context.WithValue(ctx, common.UserRoleKey(), claims.Role)
 		ctx = context.WithValue(ctx, common.UsernameKey(), claims.Username)
 		ctx = context.WithValue(ctx, common.AuthenticatedKey(), true)
-
+		
 		// Continue with authenticated request
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})

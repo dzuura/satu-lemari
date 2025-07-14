@@ -10,7 +10,7 @@ ALTER DATABASE postgres SET "timezone" TO 'Asia/Jakarta';
 CREATE TABLE IF NOT EXISTS users (
     id VARCHAR(128) PRIMARY KEY, -- Firebase UID (max 128 chars)
     email VARCHAR(255) UNIQUE NOT NULL,
-    username VARCHAR(100) UNIQUE NOT NULL,
+    username VARCHAR(100) NOT NULL,
     full_name VARCHAR(255),
     role VARCHAR(20) CHECK (role IN ('user', 'partner', 'admin')) DEFAULT 'user',
     phone VARCHAR(20),

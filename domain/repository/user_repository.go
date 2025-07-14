@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/dzuura/satu-lemari/domain/database"
-	"github.com/dzuura/satu-lemari/domain/models"
 	appError "github.com/dzuura/satu-lemari/domain/error"
+	"github.com/dzuura/satu-lemari/domain/models"
+	"github.com/google/uuid"
 )
 
 // UserRepository handles all database operations for users
@@ -329,24 +329,11 @@ func (r *UserRepository) GetUsersNearby(ctx context.Context, latitude, longitude
 // CheckEmailExists checks if email already exists
 func (r *UserRepository) CheckEmailExists(ctx context.Context, email string) (bool, error) {
 	query := `SELECT EXISTS(SELECT 1 FROM users WHERE email = $1 AND is_active = true)`
-	
+
 	var exists bool
 	err := r.db.QueryRow(ctx, query, email).Scan(&exists)
 	if err != nil {
 		return false, fmt.Errorf("failed to check email existence: %v", err)
-	}
-
-	return exists, nil
-}
-
-// CheckUsernameExists checks if username already exists
-func (r *UserRepository) CheckUsernameExists(ctx context.Context, username string) (bool, error) {
-	query := `SELECT EXISTS(SELECT 1 FROM users WHERE username = $1 AND is_active = true)`
-	
-	var exists bool
-	err := r.db.QueryRow(ctx, query, username).Scan(&exists)
-	if err != nil {
-		return false, fmt.Errorf("failed to check username existence: %v", err)
 	}
 
 	return exists, nil
@@ -416,14 +403,14 @@ func (r *UserRepository) GetUserStats(ctx context.Context, userID uuid.UUID) (*m
 	}
 
 	stats := &models.UserStats{
-		TotalDonations:      totalDonations,
-		TotalRentals:        totalRentals,
-		ActiveItems:         activeItems,
-		PendingRequests:     pendingRequests,
-		CompletedRequests:   completedRequests,
-		WeeklyQuotaUsed:     user.WeeklyDonationUsed,
+		TotalDonations:       totalDonations,
+		TotalRentals:         totalRentals,
+		ActiveItems:          activeItems,
+		PendingRequests:      pendingRequests,
+		CompletedRequests:    completedRequests,
+		WeeklyQuotaUsed:      user.WeeklyDonationUsed,
 		WeeklyQuotaRemaining: user.GetRemainingDonationQuota(),
 	}
 
 	return stats, nil
-} 
+}

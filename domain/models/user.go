@@ -8,7 +8,7 @@ import (
 type User struct {
 	ID                  string    `json:"id" db:"id"` // Firebase UID
 	Email               string    `json:"email" db:"email" validate:"required,email"`
-	Username            string    `json:"username" db:"username" validate:"required,min=3,max=30"`
+	Username            string    `json:"username" db:"username" validate:"min=3,max=30"`
 	FullName            *string   `json:"full_name" db:"full_name"`
 	Role                string    `json:"role" db:"role" validate:"required,oneof=user partner admin"`
 	Phone               *string   `json:"phone" db:"phone"`

@@ -22,6 +22,7 @@ import (
 	"github.com/dzuura/satu-lemari/domain/item"
 	"github.com/dzuura/satu-lemari/domain/logging"
 	"github.com/dzuura/satu-lemari/domain/middleware"
+	"github.com/dzuura/satu-lemari/domain/requests"
 	"github.com/dzuura/satu-lemari/domain/security"
 	"github.com/dzuura/satu-lemari/domain/user"
 )
@@ -32,6 +33,7 @@ type Server struct {
 	userService     *user.UserService
 	categoryService *category.CategoryService
 	itemService     *item.ItemService
+	requestService  *requests.RequestService
 	aiService       *ai.AIServiceManager
 	aiHandler       *ai.AIServiceHandler
 	db              *database.Database
@@ -127,6 +129,9 @@ func NewServer(cfg *config.Config) (*Server, error) {
 		aiHandler = ai.NewAIServiceHandler(cfg, aiService)
 	}
 
+	// Initialize request service
+	requestService := requests.NewRequestService(cfg)
+
 	// Initialize router
 	router := mux.NewRouter()
 
@@ -138,6 +143,7 @@ func NewServer(cfg *config.Config) (*Server, error) {
 		userService:     userService,
 		categoryService: categoryService,
 		itemService:     itemService,
+		requestService:  requestService,
 		aiService:       aiService,
 		aiHandler:       aiHandler,
 		db:              db,
@@ -254,6 +260,14 @@ func (s *Server) registerRoutes(api *mux.Router) {
 	protectedRoutes.HandleFunc("/items/{item_id}", s.itemService.UpdateItem).Methods("PUT")
 	protectedRoutes.HandleFunc("/items/{item_id}", s.itemService.DeleteItem).Methods("DELETE")
 
+	// Protected request routes
+	protectedRoutes.HandleFunc("/requests", s.requestService.CreateRequest).Methods("POST")
+	protectedRoutes.HandleFunc("/requests/my", s.requestService.GetMyRequests).Methods("GET")
+	protectedRoutes.HandleFunc("/requests/partner", s.requestService.GetPartnerRequests).Methods("GET")
+	protectedRoutes.HandleFunc("/requests/{request_id}", s.requestService.GetRequestByID).Methods("GET")
+	protectedRoutes.HandleFunc("/requests/{request_id}", s.requestService.UpdateRequest).Methods("PUT")
+	protectedRoutes.HandleFunc("/requests/{request_id}", s.requestService.DeleteRequest).Methods("DELETE")
+
 	// Admin only routes
 	adminRoutes := api.PathPrefix("").Subrouter()
 
@@ -318,6 +332,7 @@ func (s *Server) welcome(w http.ResponseWriter, r *http.Request) {
 			"users":      "/api/v1/users",
 			"categories": "/api/v1/categories",
 			"items":      "/api/v1/items",
+			"requests":   "/api/v1/requests",
 		},
 		"features": []string{
 			"Firebase Authentication",
@@ -328,6 +343,7 @@ func (s *Server) welcome(w http.ResponseWriter, r *http.Request) {
 			"Geolocation Services",
 			"Redis Caching",
 			"Queue System",
+			"Request Management",
 		},
 	}
 

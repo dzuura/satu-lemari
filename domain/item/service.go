@@ -29,6 +29,7 @@ type ItemService struct {
 type SearchFilters struct {
 	Search        string
 	CategoryID    string
+	CategoryName  string // Filter by category name
 	Type          string
 	Status        string
 	PartnerID     string
@@ -619,8 +620,9 @@ func (s *ItemService) parseSearchFilters(r *http.Request) SearchFilters {
 	filters := SearchFilters{
 		Search:        searchParam,
 		CategoryID:    common.GetQueryParam(r, "category_id", ""),
+		CategoryName:  common.GetQueryParam(r, "category", ""),
 		Type:          common.GetQueryParam(r, "type", ""),
-		Status:        common.GetQueryParam(r, "status", "active"),
+		Status:        common.GetQueryParam(r, "status", ""),
 		PartnerID:     common.GetQueryParam(r, "partner_id", ""),
 		City:          common.GetQueryParam(r, "city", ""),
 		Size:          common.GetQueryParam(r, "size", ""),
@@ -665,9 +667,19 @@ func (s *ItemService) parseSearchFilters(r *http.Request) SearchFilters {
 func (s *ItemService) searchItems(filters SearchFilters, pagination common.PaginationParams) ([]models.Item, int, *appError.AppError) {
 	client := &http.Client{Timeout: 10 * time.Second}
 
-	// Build query - include all fields including price
+	// Build query - include all fields including price (temporarily without category join)
 	query := "select=id,name,description,category_id,type,status,price,images,size,color,condition,partner_id,total_quantity,available_quantity,created_at,updated_at"
 	sqlFilters := []string{}
+
+	// Handle category filter by name (requires subquery)
+	if filters.CategoryName != "" {
+		// First, get category ID by name
+		categoryID, err := s.getCategoryIDByName(filters.CategoryName)
+		if err != nil {
+			return nil, 0, appError.New(appError.ErrNotFound, "Category not found")
+		}
+		sqlFilters = append(sqlFilters, fmt.Sprintf("category_id=eq.%s", categoryID))
+	}
 
 	// Basic filters
 	if filters.Search != "" {
@@ -677,6 +689,7 @@ func (s *ItemService) searchItems(filters SearchFilters, pagination common.Pagin
 		if len(search) > 0 {
 			sqlFilters = append(sqlFilters, fmt.Sprintf("or=(name.ilike.*%s*,description.ilike.*%s*)", search, search))
 		}
+
 	}
 	if filters.CategoryID != "" {
 		sqlFilters = append(sqlFilters, fmt.Sprintf("category_id=eq.%s", filters.CategoryID))
@@ -774,6 +787,16 @@ func (s *ItemService) searchItems(filters SearchFilters, pagination common.Pagin
 		return nil, 0, appError.New(appError.ErrInternal, "Failed to parse response")
 	}
 
+	// Populate category names for each item
+	for i := range items {
+		if categoryName, err := s.getCategoryNameByID(items[i].CategoryID.String()); err == nil {
+			items[i].Category = &models.Category{
+				ID:   items[i].CategoryID,
+				Name: categoryName,
+			}
+		}
+	}
+
 	// Get total count
 	countURL := fmt.Sprintf("%s/rest/v1/items?select=count", s.config.SupabaseURL)
 	if len(sqlFilters) > 0 {
@@ -790,7 +813,7 @@ func (s *ItemService) searchItems(filters SearchFilters, pagination common.Pagin
 func (s *ItemService) getItemByID(itemID string) (*models.Item, *appError.AppError) {
 	client := &http.Client{Timeout: 10 * time.Second}
 
-	url := fmt.Sprintf("%s/rest/v1/items?id=eq.%s&select=*", s.config.SupabaseURL, itemID)
+	url := fmt.Sprintf("%s/rest/v1/items?id=eq.%s&select=id,name,description,category_id,type,status,price,images,size,color,condition,partner_id,total_quantity,available_quantity,created_at,updated_at", s.config.SupabaseURL, itemID)
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return nil, appError.New(appError.ErrInternal, "Failed to create request")
@@ -810,8 +833,11 @@ func (s *ItemService) getItemByID(itemID string) (*models.Item, *appError.AppErr
 		return nil, appError.New(appError.ErrInternal, "Failed to read response")
 	}
 
+	log.Printf("Supabase getItemByID response: %s", string(body))
+
 	var items []models.Item
 	if err := json.Unmarshal(body, &items); err != nil {
+		log.Printf("Failed to parse getItemByID response: %v | Response body: %s", err, string(body))
 		return nil, appError.New(appError.ErrInternal, "Failed to parse response")
 	}
 
@@ -819,7 +845,16 @@ func (s *ItemService) getItemByID(itemID string) (*models.Item, *appError.AppErr
 		return nil, appError.ErrItemNotFound
 	}
 
-	return &items[0], nil
+	// Populate category name
+	item := &items[0]
+	if categoryName, err := s.getCategoryNameByID(item.CategoryID.String()); err == nil {
+		item.Category = &models.Category{
+			ID:   item.CategoryID,
+			Name: categoryName,
+		}
+	}
+
+	return item, nil
 }
 
 func (s *ItemService) createItem(partnerID string, req *models.CreateItemRequest) (*models.Item, *appError.AppError) {
@@ -1148,4 +1183,107 @@ func (s *ItemService) validateUpdateRequest(req *models.UpdateItemRequest) *appE
 		}
 	}
 	return nil
+}
+
+// getCategoryIDByName retrieves category ID by name from Supabase with flexible matching
+func (s *ItemService) getCategoryIDByName(categoryName string) (string, error) {
+	client := &http.Client{Timeout: 10 * time.Second}
+
+	// Sanitize category name
+	categoryName = strings.TrimSpace(categoryName)
+	if categoryName == "" {
+		return "", fmt.Errorf("category name cannot be empty")
+	}
+
+	// Use case-insensitive partial matching with wildcards
+	// This will match "sport" with "Sport Wear", "hoodie" with "Hoodie", etc.
+	url := fmt.Sprintf("%s/rest/v1/categories?name=ilike.*%s*&select=id,name&limit=1",
+		s.config.SupabaseURL, categoryName)
+
+	log.Printf("Searching category with URL: %s", url)
+
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return "", err
+	}
+
+	req.Header.Set("apikey", s.config.SupabaseServiceRoleKey)
+	req.Header.Set("Authorization", "Bearer "+s.config.SupabaseServiceRoleKey)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		log.Printf("Failed to get category: status %d, body: %s", resp.StatusCode, string(body))
+		return "", fmt.Errorf("failed to get category")
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+
+	log.Printf("Category search response: %s", string(body))
+
+	var categories []struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	}
+
+	if err := json.Unmarshal(body, &categories); err != nil {
+		log.Printf("Failed to parse category response: %v", err)
+		return "", err
+	}
+
+	if len(categories) == 0 {
+		log.Printf("No category found for search term: %s", categoryName)
+		return "", fmt.Errorf("category not found")
+	}
+
+	log.Printf("Found category: %s (ID: %s) for search term: %s", categories[0].Name, categories[0].ID, categoryName)
+	return categories[0].ID, nil
+}
+
+// getCategoryNameByID retrieves category name by ID from Supabase
+func (s *ItemService) getCategoryNameByID(categoryID string) (string, error) {
+	client := &http.Client{Timeout: 10 * time.Second}
+
+	url := fmt.Sprintf("%s/rest/v1/categories?id=eq.%s&select=name&limit=1",
+		s.config.SupabaseURL, categoryID)
+
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return "", err
+	}
+
+	req.Header.Set("apikey", s.config.SupabaseServiceRoleKey)
+	req.Header.Set("Authorization", "Bearer "+s.config.SupabaseServiceRoleKey)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("failed to get category")
+	}
+
+	var categories []struct {
+		Name string `json:"name"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&categories); err != nil {
+		return "", err
+	}
+
+	if len(categories) == 0 {
+		return "", fmt.Errorf("category not found")
+	}
+
+	return categories[0].Name, nil
 }

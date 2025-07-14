@@ -131,14 +131,15 @@ func IsValidUsername(username string) bool {
 		return false
 	}
 
-	// Username should contain only alphanumeric characters and underscores
+	// Username can contain alphanumeric characters, underscores, and spaces
 	for _, char := range username {
-		if !unicode.IsLetter(char) && !unicode.IsDigit(char) && char != '_' {
+		if !unicode.IsLetter(char) && !unicode.IsDigit(char) && char != '_' && char != ' ' {
 			return false
 		}
 	}
 
-	// Should not start or end with underscore
+	// Should not start or end with underscore or space
+	username = strings.TrimSpace(username)
 	if strings.HasPrefix(username, "_") || strings.HasSuffix(username, "_") {
 		return false
 	}

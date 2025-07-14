@@ -115,24 +115,28 @@ Server akan berjalan di `http://localhost:8080`
 ## 🔑 Cara Mendapatkan API Keys
 
 ### Firebase Setup
+
 1. Buat project di [Firebase Console](https://console.firebase.google.com/)
 2. Enable Authentication dan Storage
 3. Generate service account key di Project Settings > Service Accounts
 4. Copy Project ID, Private Key, dan Client Email
 
 ### Supabase Setup
+
 1. Buat project di [Supabase](https://supabase.com/)
 2. Dapatkan URL dan API keys dari Settings > API
 3. Buat storage bucket untuk upload file
 4. Set RLS policies untuk storage bucket
 
 ### Google Gemini Setup
+
 1. Dapatkan API key dari [Google AI Studio](https://makersuite.google.com/app/apikey)
 2. Enable Gemini API di Google Cloud Console
 
 ## 📚 API Documentation
 
 ### Base URL
+
 ```
 http://localhost:8080/api/v1
 ```
@@ -148,11 +152,13 @@ Authorization: Bearer <firebase_id_token>
 ### Endpoints
 
 #### Authentication
+
 - `POST /auth/verify` - Verify Firebase/Google token
 - `POST /auth/refresh` - Refresh access token (protected)
 - `POST /auth/logout` - Logout user (protected)
 
 #### Users
+
 - `GET /users/me` - Get current user profile (protected)
 - `PUT /users/me` - Update user profile (protected)
 - `GET /users/dashboard` - Get user dashboard (protected)
@@ -160,17 +166,28 @@ Authorization: Bearer <firebase_id_token>
 - `GET /users/search` - Search users (public)
 
 #### Items
-- `GET /items` - Get all items (public)
-- `GET /items/search` - Search items (public)
+
+- `GET /items` - Get all items with optional category filter (public)
+- `GET /items/search` - Search items with category filter (public)
 - `GET /items/{item_id}` - Get specific item (public)
 - `POST /items` - Create new item (protected)
-- `GET /my-items` - Get my items (protected)
+- `GET /my-items` - Get my items with category filter (protected)
 - `PUT /items/{item_id}` - Update item (protected)
 - `PATCH /items/{item_id}/status` - Update item status (protected)
 - `DELETE /items/{item_id}` - Delete item (protected)
 - `POST /items/{item_id}/ai-analyze` - Analyze item with AI (protected)
 
+#### Requests
+
+- `POST /requests` - Create new donation or rental request (protected)
+- `GET /requests/my` - Get current user's requests with filtering (protected)
+- `GET /requests/partner` - Get requests for partner's items (protected)
+- `GET /requests/{request_id}` - Get specific request details (protected)
+- `PUT /requests/{request_id}` - Update request status (protected)
+- `DELETE /requests/{request_id}` - Delete request (protected)
+
 #### Categories
+
 - `GET /categories` - Get all categories (public)
 - `GET /categories/{id}` - Get specific category (public)
 - `POST /categories` - Create category (admin only)
@@ -178,6 +195,7 @@ Authorization: Bearer <firebase_id_token>
 - `DELETE /categories/{id}` - Delete category (admin only)
 
 #### AI Services
+
 - `POST /ai/smart-listing` - Smart listing assistant (public)
 - `POST /ai/smart-listing/batch` - Batch smart listing (public)
 - `POST /ai/intent` - Parse user intent (public)
@@ -187,6 +205,7 @@ Authorization: Bearer <firebase_id_token>
 - `POST /ai/recommendations` - Generate recommendations (public)
 
 #### System
+
 - `GET /health` - Health check
 - `GET /` - API welcome page
 
@@ -203,6 +222,7 @@ Authorization: Bearer <firebase_id_token>
 Mendukung multiple channels dengan Redis caching:
 
 ### In-App Notifications
+
 ```go
 notificationService.SendNotification(ctx, userID, &NotificationTemplate{
     Title: "Permintaan Diterima",
@@ -213,6 +233,7 @@ notificationService.SendNotification(ctx, userID, &NotificationTemplate{
 ```
 
 ### Email Notifications
+
 ```go
 // Automatic email sending for high-priority notifications
 notificationService.SendNotification(ctx, userID, &NotificationTemplate{
@@ -224,6 +245,7 @@ notificationService.SendNotification(ctx, userID, &NotificationTemplate{
 ## 🧠 AI Integration
 
 ### Smart Listing Assistant
+
 ```go
 // Analyze uploaded image and auto-fill item details
 POST /ai/smart-listing
@@ -235,45 +257,13 @@ POST /ai/smart-listing
 ```
 
 ### Intent Matching
+
 ```go
 // Process natural language search queries
 POST /ai/intent
 {
   "query": "Saya cari outfit untuk interview kerja, ukuran M"
 }
-```
-
-## 📊 Monitoring & Health Checks
-
-### Health Check Endpoint
-```bash
-GET /health
-```
-
-Response:
-```json
-{
-  "status": "healthy",
-  "service": "satu-lemari-api",
-  "version": "1.0.0",
-  "timestamp": "2024-01-01T00:00:00Z",
-  "checks": {
-    "database": "connected",
-    "cache": "connected",
-    "firebase": "connected"
-  }
-}
-```
-
-### Environment Variables untuk Production
-```env
-ENVIRONMENT=production
-PORT=8080
-SUPABASE_URL=...
-REDIS_URL=redis://...
-FIREBASE_PROJECT_ID=...
-GEMINI_API_KEY=...
-# ... other production configs
 ```
 
 ## 🤝 Contributing
@@ -310,9 +300,11 @@ Distributed under the MIT License. See `LICENSE` for more information.
 ## 🔄 Changelog
 
 ### v1.0.0 (2025-07-13)
+
 - Initial release
 - Core authentication system with Firebase + JWT
 - Basic CRUD operations for items and categories
+- Request management system for donations and rentals
 - AI integration with Google Gemini
 - File upload with Supabase Storage
 - Notification system with Redis caching
@@ -321,4 +313,4 @@ Distributed under the MIT License. See `LICENSE` for more information.
 
 ---
 
-**SatuLemari** - Platform donasi dan rental pakaian yang menghubungkan kebaikan dengan kebutuhan. 🌱👕 
+**SatuLemari** - Platform donasi dan rental pakaian yang menghubungkan kebaikan dengan kebutuhan. 🌱👕

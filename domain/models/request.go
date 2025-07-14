@@ -1,6 +1,8 @@
 package models
 
 import (
+	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -221,4 +223,74 @@ func (r *Request) GetTypeLabel() string {
 	default:
 		return "Unknown"
 	}
+}
+
+// UnmarshalJSON custom unmarshaling to handle date fields from Supabase
+func (r *Request) UnmarshalJSON(data []byte) error {
+	// Create a temporary struct with string fields for dates
+	type Alias Request
+	aux := &struct {
+		PickupDate *string `json:"pickup_date"`
+		ReturnDate *string `json:"return_date"`
+		*Alias
+	}{
+		Alias: (*Alias)(r),
+	}
+
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+
+	// Parse pickup_date if not null
+	if aux.PickupDate != nil && *aux.PickupDate != "" {
+		if t, err := time.Parse("2006-01-02", *aux.PickupDate); err == nil {
+			r.PickupDate = &t
+		}
+	}
+
+	// Parse return_date if not null
+	if aux.ReturnDate != nil && *aux.ReturnDate != "" {
+		if t, err := time.Parse("2006-01-02", *aux.ReturnDate); err == nil {
+			r.ReturnDate = &t
+		}
+	}
+
+	return nil
+}
+
+// UnmarshalJSON custom unmarshaling for UpdateRequestRequest to handle date fields
+func (u *UpdateRequestRequest) UnmarshalJSON(data []byte) error {
+	// Create a temporary struct with string fields for dates
+	type Alias UpdateRequestRequest
+	aux := &struct {
+		PickupDate *string `json:"pickup_date"`
+		ReturnDate *string `json:"return_date"`
+		*Alias
+	}{
+		Alias: (*Alias)(u),
+	}
+
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+
+	// Parse pickup_date if provided
+	if aux.PickupDate != nil && *aux.PickupDate != "" {
+		if t, err := time.Parse("2006-01-02", *aux.PickupDate); err == nil {
+			u.PickupDate = &t
+		} else {
+			return fmt.Errorf("invalid pickup_date format, expected YYYY-MM-DD")
+		}
+	}
+
+	// Parse return_date if provided
+	if aux.ReturnDate != nil && *aux.ReturnDate != "" {
+		if t, err := time.Parse("2006-01-02", *aux.ReturnDate); err == nil {
+			u.ReturnDate = &t
+		} else {
+			return fmt.Errorf("invalid return_date format, expected YYYY-MM-DD")
+		}
+	}
+
+	return nil
 }

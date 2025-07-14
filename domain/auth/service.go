@@ -524,7 +524,7 @@ func (s *AuthService) createUser(uid, email, username, role string) (*models.Use
 		bodyBytes, _ := io.ReadAll(resp.Body)
 		log.Printf("Failed to create user: %s", string(bodyBytes))
 
-		// Check if it's a duplicate key error
+		// Check if it's a duplicate email error (username duplicates are now allowed)
 		if strings.Contains(string(bodyBytes), "duplicate key value violates unique constraint") {
 			// Try to get the existing user by email
 			client := &http.Client{Timeout: 10 * time.Second}
