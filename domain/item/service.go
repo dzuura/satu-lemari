@@ -854,6 +854,13 @@ func (s *ItemService) getItemByID(itemID string) (*models.Item, *appError.AppErr
 		}
 	}
 
+	// Populate partner information
+	if partnerInfo, err := s.getPartnerInfo(item.PartnerID); err == nil {
+		item.Partner = partnerInfo
+	} else {
+		log.Printf("Failed to get partner info: %v", err)
+	}
+
 	return item, nil
 }
 
@@ -1286,4 +1293,50 @@ func (s *ItemService) getCategoryNameByID(categoryID string) (string, error) {
 	}
 
 	return categories[0].Name, nil
+}
+
+// getPartnerInfo retrieves partner information by ID from Supabase
+func (s *ItemService) getPartnerInfo(partnerID string) (*models.UserProfile, error) {
+	client := &http.Client{Timeout: 10 * time.Second}
+
+	url := fmt.Sprintf("%s/rest/v1/users?id=eq.%s&select=id,username,full_name,latitude,longitude,phone,city,address,photo,created_at&limit=1",
+		s.config.SupabaseURL, partnerID)
+
+	log.Printf("Getting partner info with URL: %s", url)
+
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Set("apikey", s.config.SupabaseServiceRoleKey)
+	req.Header.Set("Authorization", "Bearer "+s.config.SupabaseServiceRoleKey)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	log.Printf("Partner info response status: %d, body: %s", resp.StatusCode, string(body))
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("failed to get partner: status %d, body: %s", resp.StatusCode, string(body))
+	}
+
+	var users []models.UserProfile
+	if err := json.Unmarshal(body, &users); err != nil {
+		return nil, err
+	}
+
+	if len(users) == 0 {
+		return nil, fmt.Errorf("partner not found")
+	}
+
+	return &users[0], nil
 }

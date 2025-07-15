@@ -31,6 +31,13 @@ type Request struct {
 	Item    *Item        `json:"item,omitempty"`
 	User    *UserProfile `json:"user,omitempty"`
 	Partner *UserProfile `json:"partner,omitempty"`
+
+	// Additional fields for API responses
+	ItemName     string  `json:"item_name,omitempty"`
+	UserName     string  `json:"user_name,omitempty"`
+	UserFullName string  `json:"user_full_name,omitempty"`
+	UserPhone    *string `json:"user_phone,omitempty"`
+	UserPhoto    *string `json:"user_photo"`
 }
 
 // CreateRequestRequest represents request to create a new request

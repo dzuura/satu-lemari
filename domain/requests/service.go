@@ -128,6 +128,14 @@ func (s *RequestService) CreateRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Require full name to be filled in user profile
+	if userProfile.FullName == nil || *userProfile.FullName == "" {
+		appError.WriteErrorResponse(w,
+			appError.New(appError.ErrInvalidInput, "Please complete your profile (full name) before making a request"),
+			common.GenerateTraceID())
+		return
+	}
+
 	// Validate request fields based on item type
 	var pickupDate *time.Time
 	var returnDate *time.Time
@@ -792,6 +800,29 @@ func (s *RequestService) searchRequests(filters *models.RequestFilter, paginatio
 		return nil, 0, appError.New(appError.ErrInternal, "Failed to decode response")
 	}
 
+	// Populate additional information for each request
+	for i := range requests {
+		// Get item name
+		if itemName, err := s.getItemNameByID(requests[i].ItemID.String()); err == nil {
+			requests[i].ItemName = itemName
+			log.Printf("Successfully got item name: %s for item ID: %s", itemName, requests[i].ItemID.String())
+		} else {
+			log.Printf("Failed to get item name for item ID: %s, error: %v", requests[i].ItemID.String(), err)
+		}
+
+		// Get user info (username, full name, phone, and photo) in one query
+		if userInfo, err := s.getUserInfoByID(requests[i].UserID); err == nil {
+			requests[i].UserName = userInfo.Username
+			requests[i].UserFullName = userInfo.FullName
+			requests[i].UserPhone = userInfo.Phone
+			requests[i].UserPhoto = userInfo.Photo
+			log.Printf("Successfully got user info: username=%s, full_name=%s, phone=%v, photo=%v for user ID: %s",
+				userInfo.Username, userInfo.FullName, userInfo.Phone, userInfo.Photo, requests[i].UserID)
+		} else {
+			log.Printf("Failed to get user info for user ID: %s, error: %v", requests[i].UserID, err)
+		}
+	}
+
 	// Get total count
 	total, err := s.getRequestsCount(filters)
 	if err != nil {
@@ -1254,4 +1285,99 @@ func buildRequestCountQueryString(filters *models.RequestFilter) string {
 	}
 	params.Set("select", "count")
 	return params.Encode()
+}
+
+// getItemNameByID retrieves item name by ID from Supabase
+func (s *RequestService) getItemNameByID(itemID string) (string, error) {
+	client := &http.Client{Timeout: 10 * time.Second}
+
+	url := fmt.Sprintf("%s/rest/v1/items?id=eq.%s&select=name&limit=1",
+		s.config.SupabaseURL, itemID)
+
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return "", err
+	}
+
+	req.Header.Set("apikey", s.config.SupabaseServiceRoleKey)
+	req.Header.Set("Authorization", "Bearer "+s.config.SupabaseServiceRoleKey)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("failed to get item")
+	}
+
+	var items []struct {
+		Name string `json:"name"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&items); err != nil {
+		return "", err
+	}
+
+	if len(items) == 0 {
+		return "", fmt.Errorf("item not found")
+	}
+
+	return items[0].Name, nil
+}
+
+// UserInfo holds user information for requests
+type UserInfo struct {
+	Username string  `json:"username"`
+	FullName string  `json:"full_name"`
+	Phone    *string `json:"phone"`
+	Photo    *string `json:"photo"`
+}
+
+// getUserInfoByID retrieves user info (username and full name) by ID from Supabase
+func (s *RequestService) getUserInfoByID(userID string) (*UserInfo, error) {
+	client := &http.Client{Timeout: 10 * time.Second}
+
+	// Query using correct column name from schema (id, not firebase_uid)
+	url := fmt.Sprintf("%s/rest/v1/users?id=eq.%s&select=username,full_name,phone,photo&limit=1",
+		s.config.SupabaseURL, userID)
+
+	log.Printf("Getting user info with URL: %s", url)
+
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Set("apikey", s.config.SupabaseServiceRoleKey)
+	req.Header.Set("Authorization", "Bearer "+s.config.SupabaseServiceRoleKey)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	log.Printf("User info response status: %d, body: %s", resp.StatusCode, string(body))
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("failed to get user: status %d, body: %s", resp.StatusCode, string(body))
+	}
+
+	var users []UserInfo
+	if err := json.Unmarshal(body, &users); err != nil {
+		return nil, err
+	}
+
+	if len(users) == 0 {
+		return nil, fmt.Errorf("user not found")
+	}
+
+	return &users[0], nil
 }

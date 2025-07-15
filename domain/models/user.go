@@ -56,6 +56,8 @@ type UserProfile struct {
 	Phone       *string   `json:"phone"`
 	Address     *string   `json:"address"`
 	City        *string   `json:"city"`
+	Latitude    *float64  `json:"latitude,omitempty"`
+	Longitude   *float64  `json:"longitude,omitempty"`
 	Photo       *string   `json:"photo"`
 	Description *string   `json:"description"`
 	Role        string    `json:"role"`

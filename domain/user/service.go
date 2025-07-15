@@ -425,6 +425,16 @@ func (s *UserService) getRecentRequests(userID string, limit int) ([]models.Requ
 		return nil, err
 	}
 
+	// Populate user information for each request
+	for i := range requests {
+		if userInfo, err := s.getUserInfoByID(requests[i].UserID); err == nil {
+			requests[i].UserName = userInfo.Username
+			requests[i].UserFullName = userInfo.FullName
+			requests[i].UserPhone = userInfo.Phone
+			requests[i].UserPhoto = userInfo.Photo
+		}
+	}
+
 	return requests, nil
 }
 
@@ -587,11 +597,72 @@ func (s *UserService) searchUsers(search, role, city string, pagination common.P
 	return users, total, nil
 }
 
+// UserInfo holds user information for dashboard
+type UserInfo struct {
+	Username string  `json:"username"`
+	FullName string  `json:"full_name"`
+	Phone    *string `json:"phone"`
+	Photo    *string `json:"photo"`
+}
+
+// getUserInfoByID retrieves user info by ID from Supabase
+func (s *UserService) getUserInfoByID(userID string) (*UserInfo, error) {
+	client := &http.Client{Timeout: 10 * time.Second}
+
+	url := fmt.Sprintf("%s/rest/v1/users?id=eq.%s&select=username,full_name,phone,photo&limit=1",
+		s.config.SupabaseURL, userID)
+
+	log.Printf("Getting user info with URL: %s", url)
+
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Set("apikey", s.config.SupabaseServiceRoleKey)
+	req.Header.Set("Authorization", "Bearer "+s.config.SupabaseServiceRoleKey)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	log.Printf("User info response status: %d, body: %s", resp.StatusCode, string(body))
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("failed to get user: status %d, body: %s", resp.StatusCode, string(body))
+	}
+
+	var users []UserInfo
+	if err := json.Unmarshal(body, &users); err != nil {
+		return nil, err
+	}
+
+	if len(users) == 0 {
+		return nil, fmt.Errorf("user not found")
+	}
+
+	return &users[0], nil
+}
+
 func (s *UserService) validateUpdateProfileRequest(req *models.UpdateUserProfileRequest) *appError.AppError {
 	// Validate username if provided
 	if req.Username != nil && *req.Username != "" {
 		if len(*req.Username) < 3 || len(*req.Username) > 30 {
 			return appError.New(appError.ErrInvalidInput, "Username must be between 3 and 30 characters")
+		}
+	}
+
+	// Validate full name if provided
+	if req.FullName != nil && *req.FullName != "" {
+		if len(*req.FullName) < 2 || len(*req.FullName) > 100 {
+			return appError.New(appError.ErrInvalidInput, "Full name must be between 2 and 100 characters")
 		}
 	}
 
