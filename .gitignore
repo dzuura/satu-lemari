@@ -1,1 +1,114 @@
+# Environment Variables
 .env
+.env.local
+.env.development
+.env.production
+
+# Go specific
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+go.work
+go.work.sum
+
+# Build artifacts
+/bin/
+/build/
+/dist/
+
+# Dependency directories
+vendor/
+
+# IDE and Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+log/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.temp
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Test coverage
+*.cover
+coverage.out
+coverage.html
+
+# Documentation build
+docs/_build/
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Google Cloud
+.gcloud/
+gcloud-debug.log
+
+# Backup files
+*.bak
+*.backup
+*.old
+
+# Cache directories
+.cache/
+*.cache
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# Temporary folders
+tmp/
+temp/
+
+# Local development
+local/
+dev/
+development/
+
+# Configuration files with sensitive data
+config.local.json
+secrets.json
+
+# App Engine deployment files
+app.yaml
+app.production.yaml
+app.staging.yaml
+main.go
+
+# Large files
+*.zip
+*.tar.gz
+*.rar
+*.7z
+
+# Profiling data
+*.prof
+*.pprof

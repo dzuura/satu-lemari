@@ -48,13 +48,19 @@ func main() {
 	// Load configuration
 	cfg := config.LoadConfig()
 
-	// Initialize logging
-	logging.InitLogger(cfg.LogLevel, cfg.LogFormat)
+	// Initialize logging with appropriate level based on debug mode
+	logLevel := cfg.LogLevel
+	if cfg.Debug && logLevel == "info" {
+		logLevel = "debug"
+	}
+
+	logging.InitLogger(logLevel, cfg.LogFormat)
 	logger := logging.GetLogger()
 	logger.Info("Starting SatuLemari backend server", map[string]interface{}{
 		"port":      cfg.Port,
 		"env":       cfg.Env,
-		"logLevel":  cfg.LogLevel,
+		"debug":     cfg.Debug,
+		"logLevel":  logLevel,
 		"logFormat": cfg.LogFormat,
 	})
 
@@ -308,8 +314,18 @@ func (s *Server) healthCheck(w http.ResponseWriter, r *http.Request) {
 		"checks": map[string]string{
 			"database": dbStatus,
 			"cache":    cacheStatus,
-			"firebase": "connected", // You could add actual Firebase health check here
+			"firebase": "connected",
 		},
+	}
+
+	// Add debug information if debug mode is enabled
+	if s.config.Debug {
+		response["debug"] = map[string]interface{}{
+			"environment": s.config.Env,
+			"port":        s.config.Port,
+			"log_level":   s.config.LogLevel,
+			"ai_enabled":  s.config.EnableAIFeatures,
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")

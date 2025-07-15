@@ -23,8 +23,8 @@ SatuLemari/
 ├── cmd/
 │   └── main.go                 # Entry point aplikasi
 ├── domain/
+│   ├── ai/                     # AI services
 │   ├── auth/                   # Authentication & Authorization
-│   ├── ai/                     # AI services (Gemini)
 │   ├── cache/                  # Redis caching
 │   ├── category/               # Category management
 │   ├── common/                 # Shared utilities
@@ -38,16 +38,19 @@ SatuLemari/
 │   ├── notification/           # Notification services
 │   ├── queue/                  # Queue system
 │   ├── repository/             # Data access layer
+│   ├── requests/               # Request management
 │   ├── security/               # Security utilities
-│   ├── storage/                # File storage (Supabase)
+│   ├── storage/                # File storage
 │   └── user/                   # User management
 ├── migrations/
-│   └── schema.sql             # Database schema
-├── docs/
-│   └── SatuLemari API.postman_collection.json
-├── go.mod
-├── go.sum
-└── .env
+│   └── schema.sql              # Database schema
+├── docs/                       # API collection
+├── scripts/                    # Token generation utility
+├── app.yaml                    # App Engine deployment config
+├── go.mod                      # Go module dependencies
+├── go.sum                      # Go module checksums
+├── DEPLOYMENT.md               # Deployment guide
+└── README.md                   # Project documentation
 ```
 
 ## 🛠️ Teknologi yang Digunakan
@@ -175,7 +178,6 @@ Authorization: Bearer <firebase_id_token>
 - `PUT /items/{item_id}` - Update item (protected)
 - `PATCH /items/{item_id}/status` - Update item status (protected)
 - `DELETE /items/{item_id}` - Delete item (protected)
-- `POST /items/{item_id}/ai-analyze` - Analyze item with AI (protected)
 
 #### Requests
 
@@ -203,11 +205,6 @@ Authorization: Bearer <firebase_id_token>
 - `GET /ai/status` - Get AI service status (public)
 - `POST /ai/analyze` - Legacy item analysis (public)
 - `POST /ai/recommendations` - Generate recommendations (public)
-
-#### System
-
-- `GET /health` - Health check
-- `GET /` - API welcome page
 
 ## 🧪 Testing dengan Postman
 

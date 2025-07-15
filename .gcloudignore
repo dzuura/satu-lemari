@@ -1,0 +1,24 @@
+# .gcloudignore
+# Files to exclude when deploying to GAE
+
+# Exclude local config
+.env
+*.local
+
+# VCS
+.git
+.gitignore
+
+# IDE
+.vscode/
+.idea/
+
+# OS generated
+.DS_Store
+Thumbs.db
+
+# Cache or build
+*.exe
+node_modules/
+__pycache__/
+tmp/

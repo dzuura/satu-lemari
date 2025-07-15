@@ -1,0 +1,67 @@
+runtime: go122
+
+instance_class: F1
+
+automatic_scaling:
+  target_cpu_utilization: 0.65
+  min_instances: 0
+  max_instances: 1
+
+env_variables:
+  # Server Configuration
+  PORT: "8080"
+  ENVIRONMENT: "production"
+  DEBUG: "false"
+
+  # Firebase Configuration
+  FIREBASE_PROJECT_ID: "your-firebase-project-id"
+  FIREBASE_PRIVATE_KEY: "-----BEGIN PRIVATE KEY-----\nYOUR_FIREBASE_PRIVATE_KEY_HERE\n-----END PRIVATE KEY-----\n"
+  FIREBASE_CLIENT_EMAIL: "firebase-adminsdk-xxxxx@your-project.iam.gserviceaccount.com"
+
+  # Supabase Configuration
+  SUPABASE_URL: "https://your-project.supabase.co"
+  SUPABASE_KEY: "your-supabase-anon-key"
+  SUPABASE_SERVICE_ROLE_KEY: "your-supabase-service-role-key"
+
+  # Redis Configuration
+  REDIS_URL: "rediss://default:password@your-redis-host:6379"
+
+  # Database Configuration (if using direct PostgreSQL connection)
+  DATABASE_URL: "postgresql://user:password@host:port/database"
+
+  # Storage Configuration
+  STORAGE_BUCKET: "your-storage-bucket"
+  STORAGE_BASE_URL: "https://your-project.supabase.co/storage/v1/object/public/bucket"
+
+  # Email Configuration (for notifications)
+  SMTP_HOST: "smtp.gmail.com"
+  SMTP_PORT: "587"
+  SMTP_USERNAME: "your-email@gmail.com"
+  SMTP_PASSWORD: "your-app-password"
+
+  # Rate Limiting Configuration
+  RATE_LIMIT_REQUESTS: "100"
+  RATE_LIMIT_BURST: "20"
+
+  # Security Configuration
+  JWT_SECRET: "your-super-secret-jwt-key-here"
+  JWT_EXPIRY: "24h"
+  BCRYPT_COST: "12"
+  ALLOWED_ORIGINS: "https://your-frontend-domain.com,https://your-app.vercel.app"
+
+  # Logging Configuration
+  LOG_LEVEL: "info"
+  LOG_FORMAT: "json"
+
+  # AI Services (Gemini API)
+  ENABLE_AI_FEATURES: "true"
+  GEMINI_API_KEY: "your-gemini-api-key-here"
+  GEMINI_MODEL: "gemini-2.0-flash"
+
+  # File Upload Configuration
+  MAX_FILE_SIZE_MB: "10"
+  ALLOWED_FILE_TYPES: "jpg,jpeg,png,webp"
+
+  # Notification Configuration
+  ENABLE_EMAIL_NOTIFICATIONS: "true"
+  ENABLE_PUSH_NOTIFICATIONS: "true"

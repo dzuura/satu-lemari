@@ -130,7 +130,7 @@ func LoadConfig() *Config {
 		LogFormat: getEnv("LOG_FORMAT", "json"),
 
 		// CORS
-		AllowedOrigins: getEnvAsSlice("CORS_ALLOWED_ORIGINS", []string{
+		AllowedOrigins: getEnvAsSlice("ALLOWED_ORIGINS", []string{
 			"http://localhost:3000",
 			"http://localhost:3001",
 			"https://satu-lemari.vercel.app",
