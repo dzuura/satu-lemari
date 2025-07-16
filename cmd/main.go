@@ -22,26 +22,29 @@ import (
 	"github.com/dzuura/satu-lemari/domain/item"
 	"github.com/dzuura/satu-lemari/domain/logging"
 	"github.com/dzuura/satu-lemari/domain/middleware"
+	"github.com/dzuura/satu-lemari/domain/notification"
 	"github.com/dzuura/satu-lemari/domain/requests"
 	"github.com/dzuura/satu-lemari/domain/security"
 	"github.com/dzuura/satu-lemari/domain/user"
 )
 
 type Server struct {
-	config          *config.Config
-	authService     *auth.AuthService
-	userService     *user.UserService
-	categoryService *category.CategoryService
-	itemService     *item.ItemService
-	requestService  *requests.RequestService
-	aiService       *ai.AIServiceManager
-	aiHandler       *ai.AIServiceHandler
-	db              *database.Database
-	cache           *cache.RedisCache
-	router          *mux.Router
-	httpServer      *http.Server
-	logger          *logging.Logger
-	passwordHasher  *security.PasswordHasher
+	config              *config.Config
+	authService         *auth.AuthService
+	userService         *user.UserService
+	categoryService     *category.CategoryService
+	itemService         *item.ItemService
+	requestService      *requests.RequestService
+	notificationService *notification.NotificationService
+	notificationHandler *notification.NotificationHandler
+	aiService           *ai.AIServiceManager
+	aiHandler           *ai.AIServiceHandler
+	db                  *database.Database
+	cache               *cache.RedisCache
+	router              *mux.Router
+	httpServer          *http.Server
+	logger              *logging.Logger
+	passwordHasher      *security.PasswordHasher
 }
 
 func main() {
@@ -135,8 +138,19 @@ func NewServer(cfg *config.Config) (*Server, error) {
 		aiHandler = ai.NewAIServiceHandler(cfg, aiService)
 	}
 
-	// Initialize request service
-	requestService := requests.NewRequestService(cfg)
+	// Initialize notification service and handler
+	notificationService, err := notification.NewNotificationService(cfg, redisCache, db)
+	if err != nil {
+		logger.Error("Failed to initialize notification service", map[string]interface{}{
+			"error": err.Error(),
+		})
+		return nil, err
+	}
+	logger.Info("Notification service initialized successfully", nil)
+	notificationHandler := notification.NewNotificationHandler(cfg, notificationService)
+
+	// Initialize request service with notification service
+	requestService := requests.NewRequestService(cfg, notificationService)
 
 	// Initialize router
 	router := mux.NewRouter()
@@ -144,19 +158,21 @@ func NewServer(cfg *config.Config) (*Server, error) {
 	logger.Info("All services initialized successfully", nil)
 
 	return &Server{
-		config:          cfg,
-		authService:     authService,
-		userService:     userService,
-		categoryService: categoryService,
-		itemService:     itemService,
-		requestService:  requestService,
-		aiService:       aiService,
-		aiHandler:       aiHandler,
-		db:              db,
-		cache:           redisCache,
-		router:          router,
-		logger:          logger,
-		passwordHasher:  passwordHasher,
+		config:              cfg,
+		authService:         authService,
+		userService:         userService,
+		categoryService:     categoryService,
+		itemService:         itemService,
+		requestService:      requestService,
+		notificationService: notificationService,
+		notificationHandler: notificationHandler,
+		aiService:           aiService,
+		aiHandler:           aiHandler,
+		db:                  db,
+		cache:               redisCache,
+		router:              router,
+		logger:              logger,
+		passwordHasher:      passwordHasher,
 	}, nil
 }
 
@@ -273,6 +289,9 @@ func (s *Server) registerRoutes(api *mux.Router) {
 	protectedRoutes.HandleFunc("/requests/{request_id}", s.requestService.GetRequestByID).Methods("GET")
 	protectedRoutes.HandleFunc("/requests/{request_id}", s.requestService.UpdateRequest).Methods("PUT")
 	protectedRoutes.HandleFunc("/requests/{request_id}", s.requestService.DeleteRequest).Methods("DELETE")
+
+	// Protected notification routes
+	s.notificationHandler.RegisterRoutes(protectedRoutes)
 
 	// Admin only routes
 	adminRoutes := api.PathPrefix("").Subrouter()

@@ -21,7 +21,7 @@ type Config struct {
 	SupabaseKey            string
 	SupabaseServiceRoleKey string
 
-	// Firebase Configuration (Authentication only)
+	// Firebase Configuration (Authentication + FCM)
 	FirebaseProjectID   string
 	FirebasePrivateKey  string
 	FirebaseClientEmail string
@@ -92,7 +92,7 @@ func LoadConfig() *Config {
 		SupabaseKey:            getEnv("SUPABASE_KEY", ""),
 		SupabaseServiceRoleKey: getEnv("SUPABASE_SERVICE_ROLE_KEY", ""),
 
-		// Firebase Configuration (Authentication only)
+		// Firebase Configuration (Authentication + FCM)
 		FirebaseProjectID:   getEnv("FIREBASE_PROJECT_ID", ""),
 		FirebasePrivateKey:  getEnv("FIREBASE_PRIVATE_KEY", ""),
 		FirebaseClientEmail: getEnv("FIREBASE_CLIENT_EMAIL", ""),

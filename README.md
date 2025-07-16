@@ -8,7 +8,7 @@ Platform donasi dan rental pakaian yang menghubungkan mitra (pemilik pakaian) de
 - **Donasi & Rental System**: Sistem manajemen pakaian untuk donasi dan sewa
 - **AI Integration**: Smart listing assistant dan intent matching (Gemini AI)
 - **File Storage**: Supabase Storage untuk upload gambar
-- **Real-time Notifications**: Notifikasi via web dan email (Redis-based)
+- **Real-time Notifications**: Notifikasi in-app, FCM push notifications, dan email dengan template system
 - **Geolocation Services**: Pencarian berdasarkan lokasi (latitude/longitude)
 - **Caching**: Redis caching untuk performa optimal
 - **Rate Limiting**: Pembatasan request per endpoint
@@ -44,7 +44,6 @@ SatuLemari/
 │   └── user/                   # User management
 ├── migrations/
 │   └── schema.sql              # Database schema
-├── docs/                       # API collection
 ├── scripts/                    # Token generation utility
 ├── app.yaml                    # App Engine deployment config
 ├── go.mod                      # Go module dependencies
@@ -62,7 +61,7 @@ SatuLemari/
 - **Authentication**: Firebase Auth + JWT
 - **File Storage**: Supabase Storage
 - **AI Services**: Google Gemini AI
-- **Notifications**: Email (SMTP) + Redis caching
+- **Notifications**: In-app notifications, FCM push notifications, Email (SMTP)
 - **Logging**: Structured JSON logging
 
 ## 📋 Prerequisites
@@ -206,6 +205,20 @@ Authorization: Bearer <firebase_id_token>
 - `POST /ai/analyze` - Legacy item analysis (public)
 - `POST /ai/recommendations` - Generate recommendations (public)
 
+#### Notifications
+
+- `GET /notifications` - Get user notifications with pagination (protected)
+- `GET /notifications/stats` - Get notification statistics (protected)
+- `PUT /notifications/{id}/read` - Mark notification as read (protected)
+- `PUT /notifications/mark-read` - Mark multiple notifications as read (protected)
+- `DELETE /notifications/{id}` - Delete notification (protected)
+- `DELETE /notifications/delete-bulk` - Delete multiple notifications (protected)
+- `POST /notifications/send-template` - Send template notification (admin)
+- `POST /notifications/send-bulk` - Send bulk notifications (admin)
+- `POST /notifications/fcm/topic` - Send topic notification (admin)
+- `POST /notifications/fcm/subscribe` - Subscribe to FCM topic (protected)
+- `POST /notifications/fcm/unsubscribe` - Unsubscribe from FCM topic (protected)
+
 ## 🧪 Testing dengan Postman
 
 1. Import collection dari `docs/SatuLemari API.postman_collection.json`
@@ -214,30 +227,19 @@ Authorization: Bearer <firebase_id_token>
    - `firebase_id_token`: Token dari Firebase Auth
    - `access_token`: Token dari endpoint `/auth/verify`
 
-## 🔔 Notification System
+## 🔔 Notification System (v1.1.0)
 
-Mendukung multiple channels dengan Redis caching:
+Sistem notifikasi lengkap dengan multiple channels dan template system:
 
-### In-App Notifications
+### Features
 
-```go
-notificationService.SendNotification(ctx, userID, &NotificationTemplate{
-    Title: "Permintaan Diterima",
-    Message: "Permintaan Anda telah diterima",
-    Channels: []string{"web", "mobile"},
-    Priority: "high",
-})
-```
-
-### Email Notifications
-
-```go
-// Automatic email sending for high-priority notifications
-notificationService.SendNotification(ctx, userID, &NotificationTemplate{
-    Channels: []string{"email"},
-    Priority: "high",
-})
-```
+- **In-App Notifications**: Notifikasi real-time dalam aplikasi
+- **FCM Push Notifications**: Push notifications untuk mobile devices
+- **Email Notifications**: Email notifications dengan template HTML
+- **Template System**: Pre-defined templates dengan placeholder substitution
+- **Bulk Operations**: Send notifications ke multiple users sekaligus
+- **Topic Subscriptions**: FCM topic-based notifications
+- **Auto-triggered**: Automatic notifications untuk request status changes
 
 ## 🧠 AI Integration
 
@@ -304,7 +306,7 @@ Distributed under the MIT License. See `LICENSE` for more information.
 - Request management system for donations and rentals
 - AI integration with Google Gemini
 - File upload with Supabase Storage
-- Notification system with Redis caching
+- Basic notification system FCM
 - Rate limiting and security middleware
 - Structured logging system
 

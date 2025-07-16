@@ -2,6 +2,7 @@ package requests
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -19,15 +20,22 @@ import (
 	"github.com/dzuura/satu-lemari/domain/queue"
 )
 
+// NotificationSender interface untuk menghindari circular import
+type NotificationSender interface {
+	SendRequestNotification(ctx context.Context, userID uuid.UUID, requestType, status, itemName string, requestID uuid.UUID) error
+	SendRequestNotificationWithFirebaseUID(ctx context.Context, firebaseUID, requestType, status, itemName string, requestID uuid.UUID) error
+}
+
 // RequestService handles donation and rental requests
 type RequestService struct {
-	config       *config.Config
-	queueService *queue.QueueService
-	httpClient   *http.Client
+	config             *config.Config
+	queueService       *queue.QueueService
+	httpClient         *http.Client
+	notificationSender NotificationSender
 }
 
 // NewRequestService creates a new request service instance
-func NewRequestService(cfg *config.Config) *RequestService {
+func NewRequestService(cfg *config.Config, notificationSender NotificationSender) *RequestService {
 	// Initialize HTTP client for Supabase REST API calls
 	httpClient := &http.Client{
 		Timeout: 30 * time.Second,
@@ -36,9 +44,10 @@ func NewRequestService(cfg *config.Config) *RequestService {
 	// TODO: Initialize Redis cache for queue service
 	// For now, we'll create a placeholder queue service
 	return &RequestService{
-		config:       cfg,
-		queueService: nil, // TODO: Initialize with proper Redis cache
-		httpClient:   httpClient,
+		config:             cfg,
+		queueService:       nil, // TODO: Initialize with proper Redis cache
+		httpClient:         httpClient,
+		notificationSender: notificationSender,
 	}
 }
 
@@ -262,6 +271,48 @@ func (s *RequestService) CreateRequest(w http.ResponseWriter, r *http.Request) {
 		// }
 	}
 
+	// Send notifications for request creation
+	if s.notificationSender != nil {
+		go func() {
+			// Get item name for notification
+			itemName := "Item"
+			if name, err := s.getItemNameByID(request.ItemID.String()); err == nil {
+				itemName = name
+			}
+
+			// 1. Send confirmation notification to USER (who created the request)
+			// Firebase UID is string, not UUID - use new method that accepts Firebase UID
+			err := s.notificationSender.SendRequestNotificationWithFirebaseUID(
+				context.Background(),
+				request.UserID, // Firebase UID as string
+				request.Type,
+				"created",
+				itemName,
+				request.ID,
+			)
+			if err != nil {
+				log.Printf("Failed to send request creation notification to user: %v", err)
+			} else {
+				log.Printf("Successfully sent request creation notification to user %s", request.UserID)
+			}
+
+			// 2. Send new request notification to PARTNER (who owns the item)
+			err = s.notificationSender.SendRequestNotificationWithFirebaseUID(
+				context.Background(),
+				request.PartnerID, // Firebase UID as string
+				request.Type,
+				"new_request", // Different status for partner
+				itemName,
+				request.ID,
+			)
+			if err != nil {
+				log.Printf("Failed to send new request notification to partner: %v", err)
+			} else {
+				log.Printf("Successfully sent new request notification to partner %s", request.PartnerID)
+			}
+		}()
+	}
+
 	// Get created request with relations
 	createdRequest, appErr := s.getRequestWithRelations(request.ID)
 	if appErr != nil {
@@ -416,15 +467,23 @@ func (s *RequestService) UpdateRequest(w http.ResponseWriter, r *http.Request) {
 
 	// Validate status changes based on business logic
 	oldStatus := existingRequest.Status
+	var newStatus string
+	statusChanged := false
+
 	if req.Status != nil {
-		newStatus := *req.Status
+		newStatus = *req.Status
 		if !s.isValidStatusTransition(oldStatus, newStatus) {
 			appError.WriteErrorResponse(w,
 				appError.New(appError.ErrInvalidOperation, "Invalid status transition"),
 				common.GenerateTraceID())
 			return
 		}
-		existingRequest.Status = newStatus
+
+		// Check if status actually changed
+		if oldStatus != newStatus {
+			statusChanged = true
+			existingRequest.Status = newStatus
+		}
 	}
 
 	// Validate required fields for specific status changes
@@ -469,6 +528,35 @@ func (s *RequestService) UpdateRequest(w http.ResponseWriter, r *http.Request) {
 	if appErr := s.updateRequest(existingRequest); appErr != nil {
 		appError.WriteErrorResponse(w, appErr, common.GenerateTraceID())
 		return
+	}
+
+	// Send notification to user about request status update
+	if statusChanged && s.notificationSender != nil {
+		go func() {
+			// Get item name for notification
+			itemName := "Item"
+			if name, err := s.getItemNameByID(existingRequest.ItemID.String()); err == nil {
+				itemName = name
+			}
+
+			log.Printf("Sending request status update notification: user=%s, status=%s->%s, item=%s, requestID=%s",
+				existingRequest.UserID, oldStatus, newStatus, itemName, existingRequest.ID.String())
+
+			// Use Firebase UID method for notification
+			err := s.notificationSender.SendRequestNotificationWithFirebaseUID(
+				context.Background(),
+				existingRequest.UserID, // Firebase UID as string
+				existingRequest.Type,
+				newStatus, // Use the new status
+				itemName,
+				existingRequest.ID,
+			)
+			if err != nil {
+				log.Printf("Failed to send request status update notification: %v", err)
+			} else {
+				log.Printf("Successfully sent request status update notification to user %s", existingRequest.UserID)
+			}
+		}()
 	}
 
 	// Get updated request with relations

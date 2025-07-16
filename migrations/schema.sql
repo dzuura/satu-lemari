@@ -99,7 +99,7 @@ CREATE TABLE IF NOT EXISTS transactions (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
--- Notifications table - updated to use VARCHAR for user_id
+-- Notifications table
 CREATE TABLE IF NOT EXISTS notifications (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     user_id VARCHAR(128) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -113,6 +113,27 @@ CREATE TABLE IF NOT EXISTS notifications (
     platform VARCHAR(20) CHECK (platform IN ('web', 'mobile', 'both')) DEFAULT 'both',
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     read_at TIMESTAMP WITH TIME ZONE
+);
+
+-- FCM Tokens table for storing Firebase Cloud Messaging tokens
+--
+-- DESIGN DECISIONS:
+-- 1. token is NOT unique because multiple users can share the same device
+--    Example: Family members using the same phone will have the same FCM token
+-- 2. Only user_id + platform combination is unique (one active token per user per platform)
+--    Example: User A can have one Android token and one iOS token, but not two Android tokens
+-- 3. FCM tokens are device-specific, not user-specific in Firebase
+-- 4. When user updates token, old token is replaced (upsert behavior)
+CREATE TABLE IF NOT EXISTS fcm_tokens (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id VARCHAR(128) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    token TEXT NOT NULL,  -- Removed UNIQUE constraint - multiple users can have same token (shared device)
+    platform VARCHAR(20) NOT NULL CHECK (platform IN ('android', 'ios', 'web')),
+    is_active BOOLEAN DEFAULT true,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    last_used_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    CONSTRAINT fcm_tokens_user_platform_unique UNIQUE(user_id, platform)  -- One active token per user per platform
 );
 
 -- Cache table (for Redis-like caching in database)
@@ -150,7 +171,7 @@ CREATE TABLE IF NOT EXISTS user_recommendations (
     UNIQUE(user_id, item_id)
 );
 
--- Search queries table (for AI intent matching) - updated to use VARCHAR for user_id
+-- Search queries table (for AI intent matching)
 CREATE TABLE IF NOT EXISTS search_queries (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     user_id VARCHAR(128) REFERENCES users(id) ON DELETE CASCADE,
@@ -178,20 +199,27 @@ CREATE INDEX IF NOT EXISTS idx_transactions_user_id ON transactions(user_id);
 CREATE INDEX IF NOT EXISTS idx_transactions_partner_id ON transactions(partner_id);
 CREATE INDEX IF NOT EXISTS idx_notifications_user_id ON notifications(user_id);
 CREATE INDEX IF NOT EXISTS idx_notifications_is_read ON notifications(is_read);
+-- FCM Tokens indexes
+CREATE INDEX IF NOT EXISTS idx_fcm_tokens_user_id ON fcm_tokens(user_id);
+CREATE INDEX IF NOT EXISTS idx_fcm_tokens_token ON fcm_tokens(token);  -- Non-unique: multiple users can share same token
+CREATE INDEX IF NOT EXISTS idx_fcm_tokens_is_active ON fcm_tokens(is_active);
+CREATE INDEX IF NOT EXISTS idx_fcm_tokens_platform ON fcm_tokens(platform);
+CREATE INDEX IF NOT EXISTS idx_fcm_tokens_last_used ON fcm_tokens(last_used_at DESC);
+CREATE INDEX IF NOT EXISTS idx_fcm_tokens_user_platform ON fcm_tokens(user_id, platform);  -- For unique constraint
 CREATE INDEX IF NOT EXISTS idx_cache_expires_at ON cache(expires_at);
 CREATE INDEX IF NOT EXISTS idx_queue_jobs_status ON queue_jobs(status);
 CREATE INDEX IF NOT EXISTS idx_queue_jobs_scheduled_at ON queue_jobs(scheduled_at);
 
 -- Insert default categories
 INSERT INTO categories (name, description, icon) VALUES
-('Formal Wear', 'Professional and formal clothing', 'formal'),
-('Casual Wear', 'Everyday casual clothing', 'casual'),
-('Sport Wear', 'Athletic and sports clothing', 'sport'),
-('Traditional Wear', 'Traditional and cultural clothing', 'traditional'),
-('Accessories', 'Clothing accessories', 'accessories'),
-('Outerwear', 'Jackets, coats, and outer garments', 'outerwear'),
-('Footwear', 'Shoes and sandals', 'footwear'),
-('Undergarments', 'Undergarments and intimate wear', 'undergarment');
+('Pakaian Formal', 'Pakaian profesional dan formal', 'formal'),
+('Pakaian Kasual', 'Pakaian kasual sehari-hari', 'kasual'),
+('Pakaian Olahraga', 'Pakaian atletik dan olahraga', 'olahraga'),
+('Pakaian Tradisional', 'Pakaian tradisional dan budaya', 'tradisional'),
+('Aksesoris', 'Aksesoris pakaian', 'aksesoris'),
+('Pakaian Luar', 'Jaket, mantel, dan pakaian luar', 'pakaian luar'),
+('Alas Kaki', 'Sepatu dan sandal', 'alas kaki'),
+('Celana', 'Aneka celana', 'celana');
 
 -- Functions for automatic updates
 CREATE OR REPLACE FUNCTION update_updated_at_column()
@@ -230,7 +258,7 @@ BEGIN
     ELSIF OLD.status = 'out_of_stock' AND NEW.available_quantity > 0 THEN
         UPDATE items SET status = 'active' WHERE id = NEW.id;
     END IF;
-    
+
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
@@ -245,6 +273,7 @@ ALTER TABLE items ENABLE ROW LEVEL SECURITY;
 ALTER TABLE requests ENABLE ROW LEVEL SECURITY;
 ALTER TABLE transactions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE notifications ENABLE ROW LEVEL SECURITY;
+ALTER TABLE fcm_tokens ENABLE ROW LEVEL SECURITY;
 
 -- RLS Policies - with proper type casting for Firebase UID
 -- Note: auth.uid() returns UUID, but we store Firebase UID as VARCHAR(128)
@@ -267,3 +296,43 @@ CREATE POLICY "Partners can manage requests for their items" ON requests FOR ALL
 -- Notifications policies
 CREATE POLICY "Users can view own notifications" ON notifications FOR SELECT USING (auth.uid()::VARCHAR = user_id);
 CREATE POLICY "Users can update own notifications" ON notifications FOR UPDATE USING (auth.uid()::VARCHAR = user_id);
+CREATE POLICY "Users can delete own notifications" ON notifications FOR DELETE USING (auth.uid()::VARCHAR = user_id);
+CREATE POLICY "System can insert notifications" ON notifications FOR INSERT WITH CHECK (true); -- Allow system to insert notifications for any user
+
+-- FCM Tokens policies
+CREATE POLICY "Users can view own FCM tokens" ON fcm_tokens FOR SELECT USING (auth.uid()::VARCHAR = user_id);
+CREATE POLICY "Users can insert own FCM tokens" ON fcm_tokens FOR INSERT WITH CHECK (auth.uid()::VARCHAR = user_id);
+CREATE POLICY "Users can update own FCM tokens" ON fcm_tokens FOR UPDATE USING (auth.uid()::VARCHAR = user_id);
+CREATE POLICY "Users can delete own FCM tokens" ON fcm_tokens FOR DELETE USING (auth.uid()::VARCHAR = user_id);
+
+-- Function to automatically update updated_at timestamp for FCM tokens
+CREATE OR REPLACE FUNCTION update_fcm_tokens_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = NOW();
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Trigger to automatically update updated_at for FCM tokens
+CREATE TRIGGER trigger_fcm_tokens_updated_at
+    BEFORE UPDATE ON fcm_tokens
+    FOR EACH ROW
+    EXECUTE FUNCTION update_fcm_tokens_updated_at();
+
+-- Function to clean up inactive FCM tokens (for maintenance)
+-- Note: Multiple users can have the same token (shared device scenario)
+-- This function only removes inactive tokens that haven't been used for specified days
+CREATE OR REPLACE FUNCTION cleanup_inactive_fcm_tokens(days_inactive INTEGER DEFAULT 30)
+RETURNS INTEGER AS $$
+DECLARE
+    deleted_count INTEGER;
+BEGIN
+    DELETE FROM fcm_tokens
+    WHERE is_active = false
+    AND updated_at < NOW() - INTERVAL '1 day' * days_inactive;
+
+    GET DIAGNOSTICS deleted_count = ROW_COUNT;
+    RETURN deleted_count;
+END;
+$$ LANGUAGE plpgsql;
