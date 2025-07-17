@@ -75,6 +75,8 @@ CREATE TABLE IF NOT EXISTS requests (
     rejection_reason TEXT,
     queue_position INTEGER,
     priority_score DECIMAL(5, 2) DEFAULT 0,
+    deleted_by_user BOOLEAN DEFAULT FALSE,
+    deleted_by_partner BOOLEAN DEFAULT FALSE,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
@@ -195,6 +197,10 @@ CREATE INDEX IF NOT EXISTS idx_requests_partner_id ON requests(partner_id);
 CREATE INDEX IF NOT EXISTS idx_requests_item_id ON requests(item_id);
 CREATE INDEX IF NOT EXISTS idx_requests_status ON requests(status);
 CREATE INDEX IF NOT EXISTS idx_requests_type ON requests(type);
+CREATE INDEX IF NOT EXISTS idx_requests_deleted_by_user ON requests(deleted_by_user);
+CREATE INDEX IF NOT EXISTS idx_requests_deleted_by_partner ON requests(deleted_by_partner);
+CREATE INDEX IF NOT EXISTS idx_requests_user_not_deleted ON requests(user_id, deleted_by_user);
+CREATE INDEX IF NOT EXISTS idx_requests_partner_not_deleted ON requests(partner_id, deleted_by_partner);
 CREATE INDEX IF NOT EXISTS idx_transactions_user_id ON transactions(user_id);
 CREATE INDEX IF NOT EXISTS idx_transactions_partner_id ON transactions(partner_id);
 CREATE INDEX IF NOT EXISTS idx_notifications_user_id ON notifications(user_id);

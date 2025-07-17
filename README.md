@@ -6,10 +6,11 @@ Platform donasi dan rental pakaian yang menghubungkan mitra (pemilik pakaian) de
 
 - **Authentication & Authorization**: Firebase Auth dengan JWT token
 - **Donasi & Rental System**: Sistem manajemen pakaian untuk donasi dan sewa
-- **AI Integration**: Smart listing assistant dan intent matching (Gemini AI)
+- **AI Integration**: Smart listing assistant, intent matching, dan personalized recommendations (Gemini AI)
 - **File Storage**: Supabase Storage untuk upload gambar
 - **Real-time Notifications**: Notifikasi in-app, FCM push notifications, dan email dengan template system
 - **Geolocation Services**: Pencarian berdasarkan lokasi (latitude/longitude)
+- **Quota System**: Weekly donation quota dengan automatic reset scheduler
 - **Caching**: Redis caching untuk performa optimal
 - **Rate Limiting**: Pembatasan request per endpoint
 - **Structured Logging**: Logging terstruktur dengan berbagai level
@@ -163,6 +164,7 @@ Authorization: Bearer <firebase_id_token>
 
 - `GET /users/me` - Get current user profile (protected)
 - `PUT /users/me` - Update user profile (protected)
+- `DELETE /users/me` - Delete user account with data anonymization (protected)
 - `GET /users/dashboard` - Get user dashboard (protected)
 - `GET /users/{user_id}/profile` - Get public user profile (public)
 - `GET /users/search` - Search users (public)
@@ -197,27 +199,46 @@ Authorization: Bearer <firebase_id_token>
 
 #### AI Services
 
-- `POST /ai/smart-listing` - Smart listing assistant (public)
-- `POST /ai/smart-listing/batch` - Batch smart listing (public)
-- `POST /ai/intent` - Parse user intent (public)
-- `GET /ai/suggestions` - Get search suggestions (public)
-- `GET /ai/status` - Get AI service status (public)
-- `POST /ai/analyze` - Legacy item analysis (public)
-- `POST /ai/recommendations` - Generate recommendations (public)
+- `POST /ai/smart-listing` - Smart listing assistant
+- `POST /ai/smart-listing/batch` - Batch smart listing
+- `POST /ai/intent` - Parse user intent
+- `GET /ai/suggestions` - Get search suggestions
+- `GET /ai/status` - Get AI service status
+- `POST /ai/analyze` - Legacy item analysis
+- `POST /ai/recommendations` - Generate recommendations
+- `GET /ai/recommendations/similar/{id}` - Get similar item recommendations
+- `GET /ai/recommendations/trending` - Get trending item recommendations
+- `GET /ai/recommendations/personalized` - Get personalized recommendations (protected)
 
 #### Notifications
 
-- `GET /notifications` - Get user notifications with pagination (protected)
-- `GET /notifications/stats` - Get notification statistics (protected)
-- `PUT /notifications/{id}/read` - Mark notification as read (protected)
-- `PUT /notifications/mark-read` - Mark multiple notifications as read (protected)
-- `DELETE /notifications/{id}` - Delete notification (protected)
-- `DELETE /notifications/delete-bulk` - Delete multiple notifications (protected)
-- `POST /notifications/send-template` - Send template notification (admin)
-- `POST /notifications/send-bulk` - Send bulk notifications (admin)
-- `POST /notifications/fcm/topic` - Send topic notification (admin)
-- `POST /notifications/fcm/subscribe` - Subscribe to FCM topic (protected)
-- `POST /notifications/fcm/unsubscribe` - Unsubscribe from FCM topic (protected)
+**Protected Notification Endpoints (Authentication Required):**
+
+- `GET /notifications` - Get user notifications with pagination and filters
+- `GET /notifications/stats` - Get notification statistics
+- `PUT /notifications/read-all` - Mark all notifications as read
+- `PUT /notifications/mark-read` - Mark multiple notifications as read (bulk)
+- `DELETE /notifications/delete-bulk` - Delete multiple notifications (bulk)
+- `PUT /notifications/{id}/read` - Mark specific notification as read
+- `DELETE /notifications/{id}` - Delete specific notification
+
+
+**FCM Token Management (Authentication Required):**
+
+- `POST /notifications/fcm-token` - Register FCM token
+- `PUT /notifications/fcm-token` - Update FCM token
+- `DELETE /notifications/fcm-token` - Remove FCM token
+- `GET /notifications/fcm-tokens` - Get user's FCM tokens
+
+**Admin/Testing Endpoints:**
+
+- `POST /notifications/send-template` - Send template notification
+- `POST /notifications/send-bulk` - Send bulk notifications
+- `POST /notifications/fcm/test` - Send test FCM notification
+- `POST /notifications/fcm/topic` - Send topic notification
+- `POST /notifications/fcm/subscribe` - Subscribe to topic
+- `POST /notifications/fcm/unsubscribe` - Unsubscribe from topic
+- `GET /notifications/health` - Notification service health check
 
 ## 🧪 Testing dengan Postman
 
@@ -241,29 +262,35 @@ Sistem notifikasi lengkap dengan multiple channels dan template system:
 - **Topic Subscriptions**: FCM topic-based notifications
 - **Auto-triggered**: Automatic notifications untuk request status changes
 
-## 🧠 AI Integration
 
-### Smart Listing Assistant
+## 🆕 Recent Updates
 
-```go
-// Analyze uploaded image and auto-fill item details
-POST /ai/smart-listing
-{
-  "images": ["base64_encoded_image"],
-  "basic_info": {"type": "donation"},
-  "description": "Optional description"
-}
-```
+### v1.2.0 - Latest Features
 
-### Intent Matching
+#### AI Recommendations Enhancement
 
-```go
-// Process natural language search queries
-POST /ai/intent
-{
-  "query": "Saya cari outfit untuk interview kerja, ukuran M"
-}
-```
+- ✅ **Personalized Recommendations**: `/ai/recommendations/personalized` dengan AI-powered personalization
+- ✅ **Similar Items**: `/ai/recommendations/similar/{id}` untuk rekomendasi item serupa
+- ✅ **Trending Items**: `/ai/recommendations/trending` untuk item yang sedang trending
+
+#### User Management Improvements
+
+- ✅ **Account Deletion**: Endpoint `DELETE /users/me` dengan data anonymization
+- ✅ **Request History Preservation**: Riwayat transaksi tetap terjaga setelah account deletion
+- ✅ **Smart Anonymization**: Partner/user yang dihapus muncul sebagai `[Deleted Partner/User]`
+
+#### Dashboard Enhancements
+
+- ✅ **Dashboard Restructure**: Stats di atas, recent requests & items di tengah, meta di bawah
+- ✅ **Recent Requests Filter**: Hanya menampilkan 5 request terbaru (semua status)
+- ✅ **Simplified Pagination**: Removed pagination dari recent requests untuk simplicity
+
+#### Technical Improvements
+
+- ✅ **Firebase Integration**: Full Firebase Auth integration untuk account deletion
+- ✅ **Database Optimization**: Improved query performance dengan proper indexing
+- ✅ **Error Handling**: Enhanced error handling untuk edge cases
+- ✅ **Code Quality**: Removed unused functions dan improved code structure
 
 ## 🤝 Contributing
 
@@ -295,21 +322,5 @@ Distributed under the MIT License. See `LICENSE` for more information.
 - Email: satulemariapp@gmail.com
 - Documentation: [API Docs](https://documenter.getpostman.com/view/39730752/2sB34foMin)
 - Issues: [GitHub Issues](https://github.com/dzuura/satu-lemari/issues)
-
-## 🔄 Changelog
-
-### v1.0.0 (2025-07-13)
-
-- Initial release
-- Core authentication system with Firebase + JWT
-- Basic CRUD operations for items and categories
-- Request management system for donations and rentals
-- AI integration with Google Gemini
-- File upload with Supabase Storage
-- Basic notification system FCM
-- Rate limiting and security middleware
-- Structured logging system
-
----
 
 **SatuLemari** - Platform donasi dan rental pakaian yang menghubungkan kebaikan dengan kebutuhan. 🌱👕

@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -711,8 +712,8 @@ func (s *ItemService) searchItems(filters SearchFilters, pagination common.Pagin
 		// Sanitize color parameter
 		color := strings.TrimSpace(filters.Color)
 		if len(color) > 0 {
-			// Use exact match for color instead of ILIKE to avoid issues
-			sqlFilters = append(sqlFilters, fmt.Sprintf("color=eq.%s", color))
+			// Use case-insensitive partial match for color to handle variations
+			sqlFilters = append(sqlFilters, fmt.Sprintf("color=ilike.*%s*", color))
 		}
 	}
 	if filters.OnlyAvailable {
@@ -787,6 +788,16 @@ func (s *ItemService) searchItems(filters SearchFilters, pagination common.Pagin
 		return nil, 0, appError.New(appError.ErrInternal, "Failed to parse response")
 	}
 
+	// Debug: Log all category IDs found in items and their names
+	for _, item := range items {
+		log.Printf("DEBUG: Item '%s' has category_id: %s", item.Name, item.CategoryID.String())
+		if categoryName, err := s.getCategoryNameByID(item.CategoryID.String()); err == nil {
+			log.Printf("DEBUG: Category ID %s = '%s'", item.CategoryID.String(), categoryName)
+		} else {
+			log.Printf("DEBUG: Failed to get category name for ID %s: %v", item.CategoryID.String(), err)
+		}
+	}
+
 	// Populate category names for each item
 	for i := range items {
 		if categoryName, err := s.getCategoryNameByID(items[i].CategoryID.String()); err == nil {
@@ -794,6 +805,9 @@ func (s *ItemService) searchItems(filters SearchFilters, pagination common.Pagin
 				ID:   items[i].CategoryID,
 				Name: categoryName,
 			}
+			log.Printf("Item %s has category: %s (ID: %s)", items[i].Name, categoryName, items[i].CategoryID.String())
+		} else {
+			log.Printf("Failed to get category name for item %s (category_id: %s): %v", items[i].Name, items[i].CategoryID.String(), err)
 		}
 	}
 
@@ -1202,14 +1216,38 @@ func (s *ItemService) getCategoryIDByName(categoryName string) (string, error) {
 		return "", fmt.Errorf("category name cannot be empty")
 	}
 
-	// Use case-insensitive partial matching with wildcards
-	// This will match "sport" with "Sport Wear", "hoodie" with "Hoodie", etc.
-	url := fmt.Sprintf("%s/rest/v1/categories?name=ilike.*%s*&select=id,name&limit=1",
-		s.config.SupabaseURL, categoryName)
+	// Use proper URL encoding for category name
+	// Try exact match first, then fallback to partial match
+	baseURL := fmt.Sprintf("%s/rest/v1/categories", s.config.SupabaseURL)
 
-	log.Printf("Searching category with URL: %s", url)
+	// Build query parameters properly
+	params := url.Values{}
+	params.Set("select", "id,name")
+	params.Set("limit", "1")
 
-	req, err := http.NewRequest("GET", url, nil)
+	// Try exact match first (case-insensitive)
+	params.Set("name", "ilike."+categoryName)
+	exactURL := baseURL + "?" + params.Encode()
+
+	// Try exact match first
+	categoryID, err := s.searchCategoryByName(client, exactURL, categoryName, "exact")
+	if err == nil {
+		return categoryID, nil
+	}
+
+	// If exact match fails, try partial match with multiple results to find one with items
+	params.Set("name", "ilike.*"+categoryName+"*")
+	params.Set("limit", "10") // Get multiple results to check which has items
+	partialURL := baseURL + "?" + params.Encode()
+
+	log.Printf("Searching category (partial match) with URL: %s", partialURL)
+
+	return s.searchCategoryWithItemsCheck(client, partialURL, categoryName)
+}
+
+// searchCategoryByName performs the actual HTTP request to search for category
+func (s *ItemService) searchCategoryByName(client *http.Client, searchURL, categoryName, matchType string) (string, error) {
+	req, err := http.NewRequest("GET", searchURL, nil)
 	if err != nil {
 		return "", err
 	}
@@ -1225,7 +1263,7 @@ func (s *ItemService) getCategoryIDByName(categoryName string) (string, error) {
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		log.Printf("Failed to get category: status %d, body: %s", resp.StatusCode, string(body))
+		log.Printf("Failed to get category (%s): status %d, body: %s", matchType, resp.StatusCode, string(body))
 		return "", fmt.Errorf("failed to get category")
 	}
 
@@ -1234,7 +1272,7 @@ func (s *ItemService) getCategoryIDByName(categoryName string) (string, error) {
 		return "", err
 	}
 
-	log.Printf("Category search response: %s", string(body))
+	log.Printf("Category search response (%s): %s", matchType, string(body))
 
 	var categories []struct {
 		ID   string `json:"id"`
@@ -1242,17 +1280,135 @@ func (s *ItemService) getCategoryIDByName(categoryName string) (string, error) {
 	}
 
 	if err := json.Unmarshal(body, &categories); err != nil {
-		log.Printf("Failed to parse category response: %v", err)
+		log.Printf("Failed to parse category response (%s): %v", matchType, err)
 		return "", err
 	}
 
 	if len(categories) == 0 {
-		log.Printf("No category found for search term: %s", categoryName)
+		log.Printf("No category found for search term: %s (match type: %s)", categoryName, matchType)
 		return "", fmt.Errorf("category not found")
 	}
 
-	log.Printf("Found category: %s (ID: %s) for search term: %s", categories[0].Name, categories[0].ID, categoryName)
+	log.Printf("Found category: %s (ID: %s) for search term: %s (match type: %s)",
+		categories[0].Name, categories[0].ID, categoryName, matchType)
 	return categories[0].ID, nil
+}
+
+// searchCategoryWithItemsCheck searches for categories and prioritizes ones that have items
+func (s *ItemService) searchCategoryWithItemsCheck(client *http.Client, searchURL, categoryName string) (string, error) {
+	req, err := http.NewRequest("GET", searchURL, nil)
+	if err != nil {
+		return "", err
+	}
+
+	req.Header.Set("apikey", s.config.SupabaseServiceRoleKey)
+	req.Header.Set("Authorization", "Bearer "+s.config.SupabaseServiceRoleKey)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		log.Printf("Failed to get categories (partial): status %d, body: %s", resp.StatusCode, string(body))
+		return "", fmt.Errorf("failed to get categories")
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+
+	log.Printf("Category search response (partial with items check): %s", string(body))
+
+	var categories []struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	}
+
+	if err := json.Unmarshal(body, &categories); err != nil {
+		log.Printf("Failed to parse categories response: %v", err)
+		return "", err
+	}
+
+	if len(categories) == 0 {
+		log.Printf("No categories found for search term: %s", categoryName)
+		return "", fmt.Errorf("category not found")
+	}
+
+	// Check each category to see if it has items
+	for _, category := range categories {
+		itemCount, err := s.getItemCountByCategory(category.ID)
+		if err != nil {
+			log.Printf("Failed to check item count for category %s (%s): %v", category.Name, category.ID, err)
+			continue
+		}
+
+		log.Printf("Category %s (ID: %s) has %d items", category.Name, category.ID, itemCount)
+
+		if itemCount > 0 {
+			log.Printf("Found category with items: %s (ID: %s, items: %d) for search term: %s",
+				category.Name, category.ID, itemCount, categoryName)
+			return category.ID, nil
+		}
+	}
+
+	// If no category has items, return the first one as fallback
+	log.Printf("No categories with items found, using first result: %s (ID: %s) for search term: %s",
+		categories[0].Name, categories[0].ID, categoryName)
+	return categories[0].ID, nil
+}
+
+// getItemCountByCategory returns the number of items in a specific category
+func (s *ItemService) getItemCountByCategory(categoryID string) (int, error) {
+	url := fmt.Sprintf("%s/rest/v1/items?category_id=eq.%s&select=id", s.config.SupabaseURL, categoryID)
+
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return 0, err
+	}
+
+	req.Header.Set("apikey", s.config.SupabaseServiceRoleKey)
+	req.Header.Set("Authorization", "Bearer "+s.config.SupabaseServiceRoleKey)
+	req.Header.Set("Prefer", "count=exact")
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("failed to get item count: status %d", resp.StatusCode)
+	}
+
+	// Get count from Content-Range header
+	contentRange := resp.Header.Get("Content-Range")
+	if contentRange != "" {
+		// Parse "0-4/5" format to get total count
+		parts := strings.Split(contentRange, "/")
+		if len(parts) == 2 {
+			if count, err := strconv.Atoi(parts[1]); err == nil {
+				return count, nil
+			}
+		}
+	}
+
+	// Fallback: count items in response body
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0, err
+	}
+
+	var items []map[string]interface{}
+	if err := json.Unmarshal(body, &items); err != nil {
+		return 0, err
+	}
+
+	return len(items), nil
 }
 
 // getCategoryNameByID retrieves category name by ID from Supabase

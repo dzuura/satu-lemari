@@ -225,6 +225,32 @@ func (s *RequestService) CreateRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// For donation requests, check weekly quota
+	if item.Type == "donation" {
+		// Get full user data for quota check
+		fullUser, appErr := s.getFullUserByID(userID)
+		if appErr != nil {
+			appError.WriteErrorResponse(w, appErr, common.GenerateTraceID())
+			return
+		}
+
+		// Check if user has remaining quota
+		if !fullUser.CanRequestDonation() {
+			appError.WriteErrorResponse(w,
+				appError.New(appError.ErrQuotaExceeded, "Weekly donation quota exceeded. You can make more donation requests next Monday."),
+				common.GenerateTraceID())
+			return
+		}
+
+		// Update user's weekly quota (increment used quota)
+		if err := s.updateUserDonationQuota(userID, 1); err != nil {
+			appError.WriteErrorResponse(w,
+				appError.New(appError.ErrInternal, "Failed to update donation quota"),
+				common.GenerateTraceID())
+			return
+		}
+	}
+
 	// Create new request
 	request := &models.Request{
 		ID:            uuid.New(),
@@ -494,21 +520,44 @@ func (s *RequestService) UpdateRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Handle quota restoration for rejected donation requests
+	if existingRequest.Status == "rejected" && oldStatus == "pending" && existingRequest.Type == "donation" {
+		// Restore user's weekly quota (decrement used quota)
+		log.Printf("Restoring donation quota for rejected request: user=%s, request=%s",
+			existingRequest.UserID, existingRequest.ID.String())
+		if err := s.updateUserDonationQuota(existingRequest.UserID, -1); err != nil {
+			log.Printf("Failed to restore donation quota: %v", err)
+			// Don't fail the request update, just log the error
+		}
+	}
+
 	// Update stok jika status berubah
 	if existingRequest.Status == "approved" && oldStatus == "pending" {
-		// Kurangi stok item
+		// Kurangi stok item untuk semua jenis request (donation & rental)
+		log.Printf("Request approved: decreasing stock for %s request (item: %s, quantity: %d)",
+			existingRequest.Type, existingRequest.ItemID.String(), existingRequest.Quantity)
 		err := s.updateItemStock(existingRequest.ItemID, -existingRequest.Quantity)
 		if err != nil {
 			appError.WriteErrorResponse(w, appError.New(appError.ErrDatabase, "Failed to update item stock (decrement)"), common.GenerateTraceID())
 			return
 		}
 	}
+
+	// Stock hanya bertambah untuk RENTAL yang completed/returned, TIDAK untuk donation
 	if (existingRequest.Status == "completed" || existingRequest.Status == "returned") && (oldStatus == "approved") {
-		// Tambah stok item (khusus rental/return)
-		err := s.updateItemStock(existingRequest.ItemID, existingRequest.Quantity)
-		if err != nil {
-			appError.WriteErrorResponse(w, appError.New(appError.ErrDatabase, "Failed to update item stock (increment)"), common.GenerateTraceID())
-			return
+		if existingRequest.Type == "rental" {
+			// Tambah stok item hanya untuk rental (item dikembalikan)
+			log.Printf("Rental completed/returned: increasing stock for rental request (item: %s, quantity: %d)",
+				existingRequest.ItemID.String(), existingRequest.Quantity)
+			err := s.updateItemStock(existingRequest.ItemID, existingRequest.Quantity)
+			if err != nil {
+				appError.WriteErrorResponse(w, appError.New(appError.ErrDatabase, "Failed to update item stock (increment)"), common.GenerateTraceID())
+				return
+			}
+		} else if existingRequest.Type == "donation" {
+			// Untuk donation completed: stock TIDAK bertambah (item sudah diberikan permanen)
+			log.Printf("Donation completed: stock remains decreased for donation request (item: %s, quantity: %d)",
+				existingRequest.ItemID.String(), existingRequest.Quantity)
 		}
 	}
 
@@ -620,33 +669,81 @@ func (s *RequestService) DeleteRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check authorization (only request owner can delete)
-	if existingRequest.UserID != userID {
+	// Check authorization (request owner or partner can delete)
+	var deletedBy string
+	if existingRequest.UserID == userID {
+		deletedBy = "user"
+	} else if existingRequest.PartnerID == userID {
+		deletedBy = "partner"
+	} else {
 		appError.WriteErrorResponse(w,
-			appError.New(appError.ErrForbidden, "Access denied"),
+			appError.New(appError.ErrForbidden, "Access denied: only request owner or partner can delete this request"),
 			common.GenerateTraceID())
 		return
 	}
 
-	// Check if request can be deleted (only pending requests)
-	if !existingRequest.IsPending() {
-		appError.WriteErrorResponse(w,
-			appError.New(appError.ErrInvalidOperation, "Only pending requests can be deleted"),
-			common.GenerateTraceID())
-		return
+	// Check if request can be deleted based on who is deleting and implement soft delete logic
+	var deleteType string
+	if deletedBy == "user" {
+		// User can delete request with any status
+		if existingRequest.Status == "pending" {
+			// Pending requests: hard delete (removes from both user and partner view)
+			deleteType = "hard_delete"
+			log.Printf("DeleteRequest: User deleting pending request - will be hard deleted (removed from both views)")
+		} else {
+			// Non-pending requests: soft delete (only hide from user view)
+			deleteType = "soft_delete_user"
+			log.Printf("DeleteRequest: User deleting %s request - will be soft deleted (hidden from user only)", existingRequest.Status)
+		}
+	} else if deletedBy == "partner" {
+		// Partner can only delete completed requests
+		if existingRequest.Status != "completed" {
+			appError.WriteErrorResponse(w,
+				appError.New(appError.ErrInvalidOperation, "Partners can only delete completed requests"),
+				common.GenerateTraceID())
+			return
+		}
+		// Completed requests: soft delete (only hide from partner view)
+		deleteType = "soft_delete_partner"
+		log.Printf("DeleteRequest: Partner deleting completed request - will be soft deleted (hidden from partner only)")
 	}
 
-	// Delete request
-	if appErr := s.deleteRequest(requestID); appErr != nil {
+	log.Printf("DeleteRequest: %s (ID: %s) is deleting request %s for item %s (delete_type: %s)",
+		deletedBy, userID, requestID.String(), existingRequest.ItemID.String(), deleteType)
+
+	// Execute delete based on type
+	if appErr := s.deleteRequestWithType(requestID, deleteType); appErr != nil {
 		appError.WriteErrorResponse(w, appErr, common.GenerateTraceID())
 		return
 	}
 
 	// Return the deleted request data for confirmation
-	common.WriteSuccessResponse(w, map[string]interface{}{
+	response := map[string]interface{}{
 		"deleted_request_id": requestID.String(),
+		"deleted_by":         deletedBy,
+		"deleted_by_user_id": userID,
 		"deleted_at":         time.Now().Format(time.RFC3339),
-	}, "Request deleted successfully")
+		"request_type":       existingRequest.Type,
+		"item_id":            existingRequest.ItemID.String(),
+		"delete_type":        deleteType,
+	}
+
+	var message string
+	switch deleteType {
+	case "hard_delete":
+		message = fmt.Sprintf("Request permanently deleted by %s (removed from both user and partner view)", deletedBy)
+	case "soft_delete_user":
+		message = fmt.Sprintf("Request hidden from user view by %s (still visible to partner)", deletedBy)
+	case "soft_delete_partner":
+		message = fmt.Sprintf("Request hidden from partner view by %s (still visible to user)", deletedBy)
+	default:
+		message = fmt.Sprintf("Request deleted successfully by %s", deletedBy)
+	}
+
+	log.Printf("DeleteRequest: Successfully processed delete request %s by %s (ID: %s, type: %s)",
+		requestID.String(), deletedBy, userID, deleteType)
+
+	common.WriteSuccessResponse(w, response, message)
 }
 
 // parseRequestFilters parses request filters from query parameters
@@ -726,18 +823,20 @@ func (s *RequestService) createRequest(request *models.Request) *appError.AppErr
 
 	// Prepare request data for Supabase
 	requestData := map[string]interface{}{
-		"id":             request.ID.String(),
-		"item_id":        request.ItemID.String(),
-		"user_id":        request.UserID,
-		"partner_id":     request.PartnerID,
-		"type":           request.Type,
-		"quantity":       request.Quantity,
-		"reason":         request.Reason,
-		"contact_info":   request.ContactInfo,
-		"status":         request.Status,
-		"priority_score": request.PriorityScore,
-		"created_at":     request.CreatedAt.Format(time.RFC3339),
-		"updated_at":     request.UpdatedAt.Format(time.RFC3339),
+		"id":                 request.ID.String(),
+		"item_id":            request.ItemID.String(),
+		"user_id":            request.UserID,
+		"partner_id":         request.PartnerID,
+		"type":               request.Type,
+		"quantity":           request.Quantity,
+		"reason":             request.Reason,
+		"contact_info":       request.ContactInfo,
+		"status":             request.Status,
+		"priority_score":     request.PriorityScore,
+		"deleted_by_user":    false,
+		"deleted_by_partner": false,
+		"created_at":         request.CreatedAt.Format(time.RFC3339),
+		"updated_at":         request.UpdatedAt.Format(time.RFC3339),
 	}
 
 	// Handle date fields properly - format as date string or null
@@ -840,14 +939,34 @@ func (s *RequestService) getRequestWithRelations(requestID uuid.UUID) (*models.R
 		return nil, err
 	}
 
-	// Load related item
+	// Load related item with additional details
 	if item, err := s.getItemByID(request.ItemID); err == nil {
 		request.Item = item
+		request.ItemName = item.Name
+		request.ItemImages = item.Images
+
+		// Include price only for rental type
+		if request.Type == "rental" && item.Price != nil {
+			request.ItemPrice = item.Price
+		}
+
+		// Load category name
+		if category, err := s.getCategoryByID(item.CategoryID); err == nil {
+			request.CategoryName = category.Name
+			// Also populate category in item relation
+			item.Category = category
+		}
 	}
 
-	// Load related user
+	// Load related user with additional details
 	if user, err := s.getUserByID(request.UserID); err == nil {
 		request.User = user
+		request.UserName = user.Username
+		if user.FullName != nil {
+			request.UserFullName = *user.FullName
+		}
+		request.UserPhone = user.Phone
+		request.UserPhoto = user.Photo
 	}
 
 	// Load related partner
@@ -890,12 +1009,28 @@ func (s *RequestService) searchRequests(filters *models.RequestFilter, paginatio
 
 	// Populate additional information for each request
 	for i := range requests {
-		// Get item name
-		if itemName, err := s.getItemNameByID(requests[i].ItemID.String()); err == nil {
-			requests[i].ItemName = itemName
-			log.Printf("Successfully got item name: %s for item ID: %s", itemName, requests[i].ItemID.String())
+		// Get item details (name, price, images, category)
+		if item, err := s.getItemByID(requests[i].ItemID); err == nil {
+			requests[i].ItemName = item.Name
+			requests[i].ItemImages = item.Images
+
+			// Include price only for rental type
+			if requests[i].Type == "rental" && item.Price != nil {
+				requests[i].ItemPrice = item.Price
+			}
+
+			// Get category name
+			if category, err := s.getCategoryByID(item.CategoryID); err == nil {
+				requests[i].CategoryName = category.Name
+				log.Printf("Successfully got category name: %s for category ID: %s", category.Name, item.CategoryID.String())
+			} else {
+				log.Printf("Failed to get category name for category ID: %s, error: %v", item.CategoryID.String(), err)
+			}
+
+			log.Printf("Successfully got item details: name=%s, price=%v, images_count=%d, category=%s for item ID: %s",
+				item.Name, item.Price, len(item.Images), requests[i].CategoryName, requests[i].ItemID.String())
 		} else {
-			log.Printf("Failed to get item name for item ID: %s, error: %v", requests[i].ItemID.String(), err)
+			log.Printf("Failed to get item details for item ID: %s, error: %v", requests[i].ItemID.String(), err)
 		}
 
 		// Get user info (username, full name, phone, and photo) in one query
@@ -965,10 +1100,24 @@ func (s *RequestService) updateRequest(request *models.Request) *appError.AppErr
 	return nil
 }
 
-// deleteRequest deletes a request
-func (s *RequestService) deleteRequest(requestID uuid.UUID) *appError.AppError {
+// deleteRequestWithType handles different types of delete operations
+func (s *RequestService) deleteRequestWithType(requestID uuid.UUID, deleteType string) *appError.AppError {
+	switch deleteType {
+	case "hard_delete":
+		return s.hardDeleteRequest(requestID)
+	case "soft_delete_user":
+		return s.softDeleteRequest(requestID, true, false)
+	case "soft_delete_partner":
+		return s.softDeleteRequest(requestID, false, true)
+	default:
+		return appError.New(appError.ErrInternal, "Invalid delete type")
+	}
+}
+
+// hardDeleteRequest permanently deletes a request from database
+func (s *RequestService) hardDeleteRequest(requestID uuid.UUID) *appError.AppError {
 	url := fmt.Sprintf("%s/rest/v1/requests?id=eq.%s", s.config.SupabaseURL, requestID.String())
-	log.Printf("Deleting request with URL: %s", url)
+	log.Printf("Hard deleting request with URL: %s", url)
 
 	req, err := http.NewRequest("DELETE", url, nil)
 	if err != nil {
@@ -987,16 +1136,73 @@ func (s *RequestService) deleteRequest(requestID uuid.UUID) *appError.AppError {
 	}
 	defer resp.Body.Close()
 
-	log.Printf("DELETE request response status: %d", resp.StatusCode)
+	log.Printf("Hard DELETE request response status: %d", resp.StatusCode)
 
 	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		log.Printf("DELETE request failed with status %d: %s", resp.StatusCode, string(body))
+		log.Printf("Hard DELETE request failed with status %d: %s", resp.StatusCode, string(body))
 		return appError.New(appError.ErrDatabase, "Failed to delete request from database")
 	}
 
-	log.Printf("Request %s deleted successfully", requestID.String())
+	log.Printf("Request hard deleted successfully: %s", requestID.String())
 	return nil
+}
+
+// softDeleteRequest marks a request as deleted for specific user type
+func (s *RequestService) softDeleteRequest(requestID uuid.UUID, deletedByUser, deletedByPartner bool) *appError.AppError {
+	url := fmt.Sprintf("%s/rest/v1/requests?id=eq.%s", s.config.SupabaseURL, requestID.String())
+
+	// Prepare update data
+	updateData := map[string]interface{}{
+		"updated_at": time.Now().Format(time.RFC3339),
+	}
+
+	if deletedByUser {
+		updateData["deleted_by_user"] = true
+	}
+	if deletedByPartner {
+		updateData["deleted_by_partner"] = true
+	}
+
+	jsonData, err := json.Marshal(updateData)
+	if err != nil {
+		return appError.New(appError.ErrInternal, "Failed to marshal update data")
+	}
+
+	log.Printf("Soft deleting request with URL: %s, data: %s", url, string(jsonData))
+
+	req, err := http.NewRequest("PATCH", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return appError.New(appError.ErrInternal, "Failed to create HTTP request")
+	}
+
+	req.Header.Set("apikey", s.config.SupabaseServiceRoleKey)
+	req.Header.Set("Authorization", "Bearer "+s.config.SupabaseServiceRoleKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		log.Printf("Supabase PATCH error: %v", err)
+		return appError.New(appError.ErrDatabase, "Failed to soft delete request")
+	}
+	defer resp.Body.Close()
+
+	log.Printf("Soft DELETE request response status: %d", resp.StatusCode)
+
+	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		log.Printf("Soft DELETE request failed with status %d: %s", resp.StatusCode, string(body))
+		return appError.New(appError.ErrDatabase, "Failed to soft delete request")
+	}
+
+	log.Printf("Request soft deleted successfully: %s (user: %v, partner: %v)",
+		requestID.String(), deletedByUser, deletedByPartner)
+	return nil
+}
+
+// deleteRequest - legacy method for backward compatibility
+func (s *RequestService) deleteRequest(requestID uuid.UUID) *appError.AppError {
+	return s.hardDeleteRequest(requestID)
 }
 
 // getExistingRequest checks if user already has a request for the item
@@ -1193,6 +1399,43 @@ func (s *RequestService) getItemByID(itemID uuid.UUID) (*models.Item, *appError.
 	return &items[0], nil
 }
 
+// getCategoryByID retrieves a category by ID using Supabase REST API
+func (s *RequestService) getCategoryByID(categoryID uuid.UUID) (*models.Category, *appError.AppError) {
+	url := fmt.Sprintf("%s/rest/v1/categories?id=eq.%s&limit=1", s.config.SupabaseURL, categoryID.String())
+
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, appError.New(appError.ErrInternal, "Failed to create HTTP request")
+	}
+
+	req.Header.Set("apikey", s.config.SupabaseServiceRoleKey)
+	req.Header.Set("Authorization", "Bearer "+s.config.SupabaseServiceRoleKey)
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return nil, appError.New(appError.ErrDatabase, "Failed to retrieve category")
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, appError.New(appError.ErrNotFound, "Category not found")
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	log.Printf("Supabase getCategoryByID response: %s", string(body))
+	var categories []models.Category
+	if err := json.Unmarshal(body, &categories); err != nil {
+		log.Printf("Failed to decode Supabase category response: %v", err)
+		return nil, appError.New(appError.ErrInternal, "Failed to decode response")
+	}
+
+	if len(categories) == 0 {
+		return nil, appError.New(appError.ErrNotFound, "Category not found")
+	}
+
+	return &categories[0], nil
+}
+
 // getUserByID retrieves a user profile by ID using Supabase REST API
 func (s *RequestService) getUserByID(userID string) (*models.UserProfile, *appError.AppError) {
 	url := fmt.Sprintf("%s/rest/v1/users?id=eq.%s&limit=1", s.config.SupabaseURL, userID)
@@ -1338,9 +1581,13 @@ func buildRequestQueryString(filters *models.RequestFilter, pagination common.Pa
 	}
 	if filters.UserID != nil {
 		params.Set("user_id", "eq."+*filters.UserID)
+		// For user requests: exclude requests deleted by user
+		params.Set("deleted_by_user", "eq.false")
 	}
 	if filters.PartnerID != nil {
 		params.Set("partner_id", "eq."+*filters.PartnerID)
+		// For partner requests: exclude requests deleted by partner
+		params.Set("deleted_by_partner", "eq.false")
 	}
 	params.Set("order", "created_at.desc")
 	params.Set("limit", fmt.Sprintf("%d", pagination.Limit))
@@ -1367,9 +1614,13 @@ func buildRequestCountQueryString(filters *models.RequestFilter) string {
 	}
 	if filters.UserID != nil {
 		params.Set("user_id", "eq."+*filters.UserID)
+		// For user requests: exclude requests deleted by user
+		params.Set("deleted_by_user", "eq.false")
 	}
 	if filters.PartnerID != nil {
 		params.Set("partner_id", "eq."+*filters.PartnerID)
+		// For partner requests: exclude requests deleted by partner
+		params.Set("deleted_by_partner", "eq.false")
 	}
 	params.Set("select", "count")
 	return params.Encode()
@@ -1468,4 +1719,88 @@ func (s *RequestService) getUserInfoByID(userID string) (*UserInfo, error) {
 	}
 
 	return &users[0], nil
+}
+
+// getFullUserByID retrieves a full user model by ID (with quota fields)
+func (s *RequestService) getFullUserByID(userID string) (*models.User, *appError.AppError) {
+	url := fmt.Sprintf("%s/rest/v1/users?id=eq.%s&limit=1", s.config.SupabaseURL, userID)
+
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, appError.New(appError.ErrInternal, "Failed to create HTTP request")
+	}
+
+	// Use service role key to bypass RLS
+	req.Header.Set("apikey", s.config.SupabaseServiceRoleKey)
+	req.Header.Set("Authorization", "Bearer "+s.config.SupabaseServiceRoleKey)
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return nil, appError.New(appError.ErrDatabase, "Failed to retrieve user")
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, appError.New(appError.ErrNotFound, "User not found")
+	}
+
+	var users []models.User
+	if err := json.NewDecoder(resp.Body).Decode(&users); err != nil {
+		return nil, appError.New(appError.ErrInternal, "Failed to decode response")
+	}
+
+	if len(users) == 0 {
+		return nil, appError.New(appError.ErrNotFound, "User not found")
+	}
+
+	return &users[0], nil
+}
+
+// updateUserDonationQuota updates user's weekly donation quota
+func (s *RequestService) updateUserDonationQuota(userID string, delta int) error {
+	// Get current user data
+	user, appErr := s.getFullUserByID(userID)
+	if appErr != nil {
+		return fmt.Errorf("failed to get user: %v", appErr)
+	}
+
+	// Calculate new quota used
+	newQuotaUsed := user.WeeklyDonationUsed + delta
+	if newQuotaUsed < 0 {
+		newQuotaUsed = 0
+	}
+
+	// Update user quota in database
+	url := fmt.Sprintf("%s/rest/v1/users?id=eq.%s", s.config.SupabaseURL, userID)
+	updateData := map[string]interface{}{
+		"weekly_donation_used": newQuotaUsed,
+		"updated_at":           time.Now().Format(time.RFC3339),
+	}
+
+	jsonData, err := json.Marshal(updateData)
+	if err != nil {
+		return fmt.Errorf("failed to marshal update data: %v", err)
+	}
+
+	req, err := http.NewRequest("PATCH", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return fmt.Errorf("failed to create HTTP request: %v", err)
+	}
+
+	req.Header.Set("apikey", s.config.SupabaseServiceRoleKey)
+	req.Header.Set("Authorization", "Bearer "+s.config.SupabaseServiceRoleKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to update user quota: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("failed to update user quota: %s", string(body))
+	}
+
+	return nil
 }
