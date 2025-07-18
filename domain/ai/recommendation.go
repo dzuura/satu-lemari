@@ -145,6 +145,13 @@ func (r *RecommendationService) GetTrendingRecommendations(ctx context.Context, 
 
 	recommendations, err := r.geminiAI.parseRecommendationResponse(response, trendingItems)
 	if err != nil {
+		log.Printf("Failed to parse Gemini response for trending: %v", err)
+		return r.generateTrendingFallback(trendingItems, limit), nil
+	}
+
+	// If Gemini returned no valid recommendations (all item IDs were invalid), use fallback
+	if len(recommendations) == 0 {
+		log.Printf("Gemini returned no valid recommendations, using fallback")
 		return r.generateTrendingFallback(trendingItems, limit), nil
 	}
 
@@ -437,11 +444,17 @@ func (r *RecommendationService) generateFallbackRecommendations(behavior *UserBe
 			Reason:      reason,
 			Score:       score,
 			Data: map[string]interface{}{
-				"item_id":  item["id"],
-				"name":     item["name"],
-				"images":   images,
-				"category": item["category_id"],
-				"rank":     i + 1,
+				"item_id":    item["id"],
+				"name":       item["name"],
+				"images":     images,
+				"size":       item["size"],
+				"color":      item["color"],
+				"type":       item["type"],
+				"price":      item["price"],
+				"condition":  item["condition"],
+				"category":   item["category_id"],
+				"partner_id": item["partner_id"],
+				"rank":       i + 1,
 			},
 		}
 
@@ -505,7 +518,13 @@ func (r *RecommendationService) generateSimilarityFallback(referenceItem map[str
 				"item_id":    item["id"],
 				"name":       item["name"],
 				"images":     images,
+				"size":       item["size"],
+				"color":      item["color"],
+				"type":       item["type"],
+				"price":      item["price"],
+				"condition":  item["condition"],
 				"category":   item["category_id"],
+				"partner_id": item["partner_id"],
 				"similarity": score,
 			},
 		}
@@ -552,11 +571,17 @@ func (r *RecommendationService) generateTrendingFallback(items []map[string]inte
 			Reason:      "Sedang trending berdasarkan aktivitas terbaru",
 			Score:       score,
 			Data: map[string]interface{}{
-				"item_id":  item["id"],
-				"name":     item["name"],
-				"images":   images,
-				"category": item["category_id"],
-				"trending": true,
+				"item_id":    item["id"],
+				"name":       item["name"],
+				"images":     images,
+				"size":       item["size"],
+				"color":      item["color"],
+				"type":       item["type"],
+				"price":      item["price"],
+				"condition":  item["condition"],
+				"category":   item["category_id"],
+				"partner_id": item["partner_id"],
+				"trending":   true,
 			},
 		}
 
@@ -618,18 +643,26 @@ Analisis item-item terbaru ini dan identifikasi pola trending dalam konteks fash
 Item Terbaru:
 %s
 
+PENTING: Hanya gunakan item_id yang tersedia dalam daftar item di atas. Jangan buat item_id baru.
+
 Mohon berikan respons dalam format JSON array dengan rekomendasi trending:
 [
   {
-    "item_id": "string",
-    "title": "Trending: [nama item]",
+    "item_id": "HARUS menggunakan ID dari daftar item di atas",
+    "title": "Trending: [nama item dari daftar]",
     "description": "Mengapa item ini sedang trending dalam bahasa Indonesia",
-    "reason": "Analisis trend dalam bahasa Indonesia",
+    "reason": "Analisis trend berdasarkan data item yang tersedia",
     "score": 0.0-1.0,
     "category": "string",
     "tags": ["trending", "faktor-faktor"]
   }
 ]
+
+ATURAN WAJIB:
+- HANYA gunakan item_id yang ada dalam daftar item di atas
+- JANGAN buat item_id baru atau palsu
+- Pilih item yang benar-benar trending dari daftar yang tersedia
+- Urutkan berdasarkan score tertinggi
 
 Pertimbangkan:
 - Kategori yang populer di Indonesia
@@ -642,6 +675,6 @@ Pertimbangkan:
 
 Fokus pada trend fashion Indonesia dan preferensi lokal.
 Gunakan bahasa Indonesia untuk description dan reason.
-Batasi hingga 5 item trending teratas.
+Batasi hingga 5 item trending teratas dari daftar yang tersedia.
 `, string(itemsJSON))
 }

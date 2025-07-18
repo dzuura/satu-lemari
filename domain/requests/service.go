@@ -943,6 +943,7 @@ func (s *RequestService) getRequestWithRelations(requestID uuid.UUID) (*models.R
 	if item, err := s.getItemByID(request.ItemID); err == nil {
 		request.Item = item
 		request.ItemName = item.Name
+		request.ItemSize = item.Size
 		request.ItemImages = item.Images
 
 		// Include price only for rental type
@@ -1009,9 +1010,10 @@ func (s *RequestService) searchRequests(filters *models.RequestFilter, paginatio
 
 	// Populate additional information for each request
 	for i := range requests {
-		// Get item details (name, price, images, category)
+		// Get item details (name, size, price, images, category)
 		if item, err := s.getItemByID(requests[i].ItemID); err == nil {
 			requests[i].ItemName = item.Name
+			requests[i].ItemSize = item.Size
 			requests[i].ItemImages = item.Images
 
 			// Include price only for rental type
@@ -1027,8 +1029,8 @@ func (s *RequestService) searchRequests(filters *models.RequestFilter, paginatio
 				log.Printf("Failed to get category name for category ID: %s, error: %v", item.CategoryID.String(), err)
 			}
 
-			log.Printf("Successfully got item details: name=%s, price=%v, images_count=%d, category=%s for item ID: %s",
-				item.Name, item.Price, len(item.Images), requests[i].CategoryName, requests[i].ItemID.String())
+			log.Printf("Successfully got item details: name=%s, size=%s, price=%v, images_count=%d, category=%s for item ID: %s",
+				item.Name, item.Size, item.Price, len(item.Images), requests[i].CategoryName, requests[i].ItemID.String())
 		} else {
 			log.Printf("Failed to get item details for item ID: %s, error: %v", requests[i].ItemID.String(), err)
 		}

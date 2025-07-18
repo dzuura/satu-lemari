@@ -199,16 +199,16 @@ Authorization: Bearer <firebase_id_token>
 
 #### AI Services
 
-- `POST /ai/smart-listing` - Smart listing assistant
-- `POST /ai/smart-listing/batch` - Batch smart listing
-- `POST /ai/intent` - Parse user intent
-- `GET /ai/suggestions` - Get search suggestions
-- `GET /ai/status` - Get AI service status
-- `POST /ai/analyze` - Legacy item analysis
-- `POST /ai/recommendations` - Generate recommendations
+- `POST /ai/smart-listing` - Smart listing assistant with AI-powered item analysis
+- `POST /ai/smart-listing/batch` - Batch smart listing for multiple items
+- `POST /ai/intent` - Parse user intent from natural language queries
+- `GET /ai/suggestions` - Get intelligent search suggestions
+- `GET /ai/status` - Get AI service status and health check
+- `POST /ai/analyze` - Legacy item analysis (backward compatibility)
+- `POST /ai/recommendations` - Generate general recommendations
 - `GET /ai/recommendations/similar/{id}` - Get similar item recommendations
 - `GET /ai/recommendations/trending` - Get trending item recommendations
-- `GET /ai/recommendations/personalized` - Get personalized recommendations (protected)
+- `GET /ai/recommendations/personalized` - Get personalized recommendations based on user behavior (protected)
 
 #### Notifications
 
@@ -221,7 +221,6 @@ Authorization: Bearer <firebase_id_token>
 - `DELETE /notifications/delete-bulk` - Delete multiple notifications (bulk)
 - `PUT /notifications/{id}/read` - Mark specific notification as read
 - `DELETE /notifications/{id}` - Delete specific notification
-
 
 **FCM Token Management (Authentication Required):**
 
@@ -272,6 +271,7 @@ Sistem notifikasi lengkap dengan multiple channels dan template system:
 - ✅ **Personalized Recommendations**: `/ai/recommendations/personalized` dengan AI-powered personalization
 - ✅ **Similar Items**: `/ai/recommendations/similar/{id}` untuk rekomendasi item serupa
 - ✅ **Trending Items**: `/ai/recommendations/trending` untuk item yang sedang trending
+- ✅ **Fallback Protection**: Automatic fallback ke database-only jika AI mengembalikan data invalid
 
 #### User Management Improvements
 

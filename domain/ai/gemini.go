@@ -319,24 +319,40 @@ func (g *GeminiService) parseRecommendationResponse(response string, availableIt
 
 	var recommendations []*Recommendation
 	for _, result := range results {
+		// Validate that item ID exists in availableItems
+		item, exists := itemMap[result.ItemID]
+		if !exists {
+			log.Printf("Warning: Gemini returned invalid item_id: %s, skipping", result.ItemID)
+			continue // Skip invalid item IDs
+		}
+
 		// Get item details from availableItems
 		var itemName string
 		var images []string
-		if item, exists := itemMap[result.ItemID]; exists {
-			if name, ok := item["name"].(string); ok {
-				itemName = name
-			}
-			// Handle images array
-			if imgArray, ok := item["images"].([]interface{}); ok {
-				for _, img := range imgArray {
-					if imgStr, ok := img.(string); ok {
-						images = append(images, imgStr)
-					}
-				}
-			} else if imgArray, ok := item["images"].([]string); ok {
-				images = imgArray
-			}
+		var size, color, itemType, condition, partnerID interface{}
+		var price interface{}
+
+		if name, ok := item["name"].(string); ok {
+			itemName = name
 		}
+		// Handle images array
+		if imgArray, ok := item["images"].([]interface{}); ok {
+			for _, img := range imgArray {
+				if imgStr, ok := img.(string); ok {
+					images = append(images, imgStr)
+				}
+			}
+		} else if imgArray, ok := item["images"].([]string); ok {
+			images = imgArray
+		}
+
+		// Extract additional fields
+		size = item["size"]
+		color = item["color"]
+		itemType = item["type"]
+		price = item["price"]
+		condition = item["condition"]
+		partnerID = item["partner_id"]
 
 		recommendation := &Recommendation{
 			Type:        "item_recommendation",
@@ -345,11 +361,17 @@ func (g *GeminiService) parseRecommendationResponse(response string, availableIt
 			Reason:      result.Reason,
 			Score:       result.Score,
 			Data: map[string]interface{}{
-				"item_id":  result.ItemID,
-				"name":     itemName,
-				"images":   images,
-				"category": result.Category,
-				"tags":     result.Tags,
+				"item_id":    result.ItemID,
+				"name":       itemName,
+				"images":     images,
+				"size":       size,
+				"color":      color,
+				"type":       itemType,
+				"price":      price,
+				"condition":  condition,
+				"category":   result.Category,
+				"partner_id": partnerID,
+				"tags":       result.Tags,
 			},
 		}
 		recommendations = append(recommendations, recommendation)

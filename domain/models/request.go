@@ -36,6 +36,7 @@ type Request struct {
 
 	// Additional fields for API responses
 	ItemName     string   `json:"item_name,omitempty"`
+	ItemSize     string   `json:"item_size,omitempty"`     // Item size
 	ItemPrice    *float64 `json:"item_price,omitempty"`    // For rental type only
 	ItemImages   []string `json:"item_images,omitempty"`   // Item images
 	CategoryName string   `json:"category_name,omitempty"` // Category name

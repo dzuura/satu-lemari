@@ -235,7 +235,7 @@ func (s *ItemService) UpdateItem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Parse form data
+	// Parse form data (supports both form-data and JSON)
 	formValues, files, err := common.ParseFormData(r)
 	if err != nil {
 		appError.WriteErrorResponse(w,
@@ -296,35 +296,21 @@ func (s *ItemService) UpdateItem(w http.ResponseWriter, r *http.Request) {
 		status = &statusVal
 	}
 
-	// Handle image uploads
+	// Handle image uploads with proper replacement logic
 	var imageURLs []string
 	uploadedFiles := common.GetFormFiles(files, "images")
 
 	// Check if user wants to remove all images (images field is explicitly set to empty)
 	removeImages := common.GetFormValue(formValues, "remove_images") == "true"
 
+	// Determine image update strategy
 	if len(uploadedFiles) > 0 {
-		// User uploaded new images - delete old ones first
-		if len(existing.Images) > 0 {
-			log.Printf("Deleting %d old images for item %s", len(existing.Images), itemID.String())
-			for _, imageURL := range existing.Images {
-				// Extract file path from URL
-				// URL format: https://project.supabase.co/storage/v1/object/public/items/images/filename.jpg
-				// We need to extract: images/filename.jpg
-				if strings.Contains(imageURL, "/storage/v1/object/public/items/") {
-					filePath := strings.Split(imageURL, "/storage/v1/object/public/items/")
-					if len(filePath) > 1 {
-						// Delete file from storage
-						if deleteErr := s.storage.DeleteFile("items", filePath[1]); deleteErr != nil {
-							log.Printf("Warning: Failed to delete old image %s: %v", imageURL, deleteErr)
-							// Continue with upload even if old image deletion fails
-						} else {
-							log.Printf("Successfully deleted old image: %s", imageURL)
-						}
-					}
-				}
-			}
-		}
+		// Strategy 1: Replace all images with new uploads
+		log.Printf("Replacing all images for item %s - deleting %d old images, uploading %d new images",
+			itemID.String(), len(existing.Images), len(uploadedFiles))
+
+		// Delete all existing images from storage first
+		s.deleteItemImages(existing.Images, itemID.String())
 
 		// Upload new images
 		uploadResults, uploadErr := s.storage.UploadMultipleFiles(uploadedFiles, "items", "images")
@@ -337,26 +323,20 @@ func (s *ItemService) UpdateItem(w http.ResponseWriter, r *http.Request) {
 			imageURLs = append(imageURLs, result.URL)
 		}
 
-		log.Printf("Successfully uploaded %d new images for item %s", len(imageURLs), itemID.String())
-	} else if removeImages && len(existing.Images) > 0 {
-		// User wants to remove all images (no new images uploaded)
+		log.Printf("Successfully replaced images for item %s: %d new images uploaded", itemID.String(), len(imageURLs))
+	} else if removeImages {
+		// Strategy 2: Remove all images (no new uploads)
 		log.Printf("Removing all %d images for item %s", len(existing.Images), itemID.String())
-		for _, imageURL := range existing.Images {
-			// Extract file path from URL
-			if strings.Contains(imageURL, "/storage/v1/object/public/items/") {
-				filePath := strings.Split(imageURL, "/storage/v1/object/public/items/")
-				if len(filePath) > 1 {
-					// Delete file from storage
-					if deleteErr := s.storage.DeleteFile("items", filePath[1]); deleteErr != nil {
-						log.Printf("Warning: Failed to delete image %s: %v", imageURL, deleteErr)
-					} else {
-						log.Printf("Successfully deleted image: %s", imageURL)
-					}
-				}
-			}
-		}
+
+		// Delete all existing images from storage
+		s.deleteItemImages(existing.Images, itemID.String())
+
 		// Set empty array to remove all images from database
 		imageURLs = []string{}
+	} else {
+		// Strategy 3: No image changes - keep existing images
+		imageURLs = existing.Images
+		log.Printf("No image changes for item %s - keeping %d existing images", itemID.String(), len(imageURLs))
 	}
 
 	// Create request object
@@ -967,9 +947,8 @@ func (s *ItemService) updateItem(itemID string, req *models.UpdateItemRequest) (
 		updateData["price"] = *req.Price
 	}
 	if req.Images != nil {
-		if len(req.Images) > 0 {
-			updateData["images"] = req.Images
-		}
+		// Allow empty array to remove all images
+		updateData["images"] = req.Images
 	}
 	if req.Size != nil {
 		updateData["size"] = *req.Size
@@ -979,6 +958,13 @@ func (s *ItemService) updateItem(itemID string, req *models.UpdateItemRequest) (
 	}
 	if req.Condition != nil {
 		updateData["condition"] = *req.Condition
+	}
+	if req.TotalQuantity != nil {
+		updateData["total_quantity"] = *req.TotalQuantity
+		// Also update available_quantity if total_quantity is being updated
+		// For safety, we'll set available_quantity to the same value
+		// In a real scenario, you might want more sophisticated logic
+		updateData["available_quantity"] = *req.TotalQuantity
 	}
 
 	jsonData, err := json.Marshal(updateData)
@@ -1186,24 +1172,68 @@ func (s *ItemService) validateCreateRequest(req *models.CreateItemRequest) *appE
 
 func (s *ItemService) validateUpdateRequest(req *models.UpdateItemRequest) *appError.AppError {
 	if req.Name != nil {
-		if len(*req.Name) < 3 || len(*req.Name) > 100 {
-			return appError.New(appError.ErrInvalidInput, "Name must be between 3 and 100 characters")
+		if len(*req.Name) < 2 || len(*req.Name) > 255 {
+			return appError.New(appError.ErrInvalidInput, "Name must be between 2 and 255 characters")
 		}
 	}
 	if req.Status != nil {
-		if !common.Contains([]string{"active", "inactive", "rented", "donated"}, *req.Status) {
-			return appError.New(appError.ErrInvalidInput, "Invalid status")
+		if !common.Contains([]string{"active", "inactive", "out_of_stock"}, *req.Status) {
+			return appError.New(appError.ErrInvalidInput, "Invalid status. Must be one of: active, inactive, out_of_stock")
 		}
 	}
 	if req.Images != nil {
-		if len(req.Images) == 0 {
-			return appError.New(appError.ErrInvalidInput, "At least one image is required")
-		}
 		if len(req.Images) > 5 {
 			return appError.New(appError.ErrInvalidInput, "Maximum 5 images allowed")
 		}
+		// Note: Empty images array is allowed for update (removes all images)
+	}
+	if req.TotalQuantity != nil {
+		if *req.TotalQuantity < 1 {
+			return appError.New(appError.ErrInvalidInput, "Total quantity must be at least 1")
+		}
+	}
+	if req.Condition != nil {
+		if !common.Contains([]string{"excellent", "good", "fair"}, *req.Condition) {
+			return appError.New(appError.ErrInvalidInput, "Invalid condition. Must be one of: excellent, good, fair")
+		}
+	}
+	if req.Size != nil {
+		if len(*req.Size) == 0 {
+			return appError.New(appError.ErrInvalidInput, "Size cannot be empty")
+		}
 	}
 	return nil
+}
+
+// deleteItemImages deletes multiple images from storage
+func (s *ItemService) deleteItemImages(imageURLs []string, itemID string) {
+	if len(imageURLs) == 0 {
+		return
+	}
+
+	log.Printf("Deleting %d images from storage for item %s", len(imageURLs), itemID)
+
+	for _, imageURL := range imageURLs {
+		// Extract file path from URL
+		// URL format: https://project.supabase.co/storage/v1/object/public/items/images/filename.jpg
+		// We need to extract: images/filename.jpg
+		if strings.Contains(imageURL, "/storage/v1/object/public/items/") {
+			filePath := strings.Split(imageURL, "/storage/v1/object/public/items/")
+			if len(filePath) > 1 {
+				// Delete file from storage
+				if deleteErr := s.storage.DeleteFile("items", filePath[1]); deleteErr != nil {
+					log.Printf("Warning: Failed to delete image %s: %v", imageURL, deleteErr)
+					// Continue with other deletions even if one fails
+				} else {
+					log.Printf("Successfully deleted image from storage: %s", imageURL)
+				}
+			} else {
+				log.Printf("Warning: Could not extract file path from URL: %s", imageURL)
+			}
+		} else {
+			log.Printf("Warning: Image URL format not recognized: %s", imageURL)
+		}
+	}
 }
 
 // getCategoryIDByName retrieves category ID by name from Supabase with flexible matching
