@@ -2,6 +2,7 @@ package user
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"firebase.google.com/go/v4/auth"
 	"github.com/gorilla/mux"
 
 	"github.com/dzuura/satu-lemari/domain/common"
@@ -21,12 +23,14 @@ import (
 type UserService struct {
 	config        *config.Config
 	fileUploadSvc *common.FileUploadService
+	firebaseAuth  *auth.Client
 }
 
-func NewUserService(cfg *config.Config) *UserService {
+func NewUserService(cfg *config.Config, firebaseAuth *auth.Client) *UserService {
 	return &UserService{
 		config:        cfg,
 		fileUploadSvc: common.NewFileUploadService(cfg.SupabaseURL, cfg.SupabaseServiceRoleKey),
+		firebaseAuth:  firebaseAuth,
 	}
 }
 
@@ -34,6 +38,7 @@ func (s *UserService) RegisterRoutes(r *mux.Router) {
 	// Protected routes - require authentication
 	r.HandleFunc("/users/me", s.GetMyProfile).Methods("GET")
 	r.HandleFunc("/users/me", s.UpdateMyProfile).Methods("PUT")
+	r.HandleFunc("/users/me", s.DeleteMyAccount).Methods("DELETE")
 	r.HandleFunc("/users/dashboard", s.GetDashboard).Methods("GET")
 
 	// Public routes
@@ -200,7 +205,7 @@ func (s *UserService) GetDashboard(w http.ResponseWriter, r *http.Request) {
 	// Get recent activities based on role
 	var dashboard interface{}
 	if role == "partner" {
-		recentRequests, err := s.getRecentRequests(userID, 5)
+		recentRequests, err := s.getRecentRequestsSimple(userID, 5)
 		if err != nil {
 			log.Printf("Error getting recent requests: %v", err)
 			recentRequests = []models.Request{}
@@ -212,7 +217,14 @@ func (s *UserService) GetDashboard(w http.ResponseWriter, r *http.Request) {
 			recentItems = []models.Item{}
 		}
 
-		dashboard = models.UserDashboard{
+		// Create ordered response structure
+		type PartnerDashboard struct {
+			Stats          models.UserStats `json:"stats"`
+			RecentRequests []models.Request `json:"recent_requests"`
+			RecentItems    []models.Item    `json:"recent_items"`
+		}
+
+		dashboard = PartnerDashboard{
 			Stats:          *stats,
 			RecentRequests: recentRequests,
 			RecentItems:    recentItems,
@@ -322,33 +334,67 @@ func (s *UserService) getUserStats(userID, role string) (*models.UserStats, *app
 	stats := &models.UserStats{}
 
 	if role == "partner" {
-		// Get partner statistics
+		// Partner Statistics
+
 		// Active items count
 		itemsURL := fmt.Sprintf("%s/rest/v1/items?partner_id=eq.%s&status=eq.active&select=count", s.config.SupabaseURL, userID)
 		if count, err := s.getCount(client, itemsURL); err == nil {
 			stats.ActiveItems = count
 		}
 
-		// Pending requests count
-		requestsURL := fmt.Sprintf("%s/rest/v1/requests?partner_id=eq.%s&status=eq.pending&select=count", s.config.SupabaseURL, userID)
-		if count, err := s.getCount(client, requestsURL); err == nil {
+		// Pending requests count (requests from users to this partner)
+		pendingURL := fmt.Sprintf("%s/rest/v1/requests?partner_id=eq.%s&status=eq.pending&select=count", s.config.SupabaseURL, userID)
+		if count, err := s.getCount(client, pendingURL); err == nil {
 			stats.PendingRequests = count
 		}
 
-		// Completed requests count
-		completedURL := fmt.Sprintf("%s/rest/v1/requests?partner_id=eq.%s&status=eq.completed&select=count", s.config.SupabaseURL, userID)
-		if count, err := s.getCount(client, completedURL); err == nil {
-			stats.CompletedRequests = count
-		}
-	} else {
-		// Get user statistics
-		// Total requests count
-		requestsURL := fmt.Sprintf("%s/rest/v1/requests?user_id=eq.%s&select=count", s.config.SupabaseURL, userID)
-		if count, err := s.getCount(client, requestsURL); err == nil {
-			stats.TotalDonations = count // This includes both donations and rentals
+		// Total donations completed (type=donation, status=completed)
+		donationsURL := fmt.Sprintf("%s/rest/v1/requests?partner_id=eq.%s&type=eq.donation&status=eq.completed&select=count", s.config.SupabaseURL, userID)
+		if count, err := s.getCount(client, donationsURL); err == nil {
+			stats.TotalDonations = count
 		}
 
-		// Get user info for quota
+		// Total rentals completed (type=rental, status=completed)
+		rentalsURL := fmt.Sprintf("%s/rest/v1/requests?partner_id=eq.%s&type=eq.rental&status=eq.completed&select=count", s.config.SupabaseURL, userID)
+		if count, err := s.getCount(client, rentalsURL); err == nil {
+			stats.TotalRentals = count
+		}
+
+		// Completed requests = Total donations + Total rentals
+		stats.CompletedRequests = stats.TotalDonations + stats.TotalRentals
+
+		// Weekly quota fields are always 0 for partners
+		stats.WeeklyQuotaUsed = 0
+		stats.WeeklyQuotaRemaining = 0
+
+	} else {
+		// User Statistics
+
+		// Active items is always 0 for regular users
+		stats.ActiveItems = 0
+
+		// Pending requests count (requests made by this user)
+		pendingURL := fmt.Sprintf("%s/rest/v1/requests?user_id=eq.%s&status=eq.pending&select=count", s.config.SupabaseURL, userID)
+		if count, err := s.getCount(client, pendingURL); err == nil {
+			stats.PendingRequests = count
+		}
+
+		// Total donations received (type=donation, status=completed)
+		donationsURL := fmt.Sprintf("%s/rest/v1/requests?user_id=eq.%s&type=eq.donation&status=eq.completed&select=count", s.config.SupabaseURL, userID)
+		if count, err := s.getCount(client, donationsURL); err == nil {
+			stats.TotalDonations = count
+		}
+
+		// Total rentals received (type=rental, status=completed)
+		rentalsURL := fmt.Sprintf("%s/rest/v1/requests?user_id=eq.%s&type=eq.rental&status=eq.completed&select=count", s.config.SupabaseURL, userID)
+		if count, err := s.getCount(client, rentalsURL); err == nil {
+			stats.TotalRentals = count
+		}
+
+		// Completed requests = Total donations + Total rentals
+		stats.CompletedRequests = stats.TotalDonations + stats.TotalRentals
+
+		// Get user info for weekly quota
 		user, err := s.getUserByID(userID)
 		if err == nil {
 			stats.WeeklyQuotaUsed = user.WeeklyDonationUsed
@@ -394,10 +440,11 @@ func (s *UserService) getCount(client *http.Client, url string) (int, error) {
 	return 0, nil
 }
 
-func (s *UserService) getRecentRequests(userID string, limit int) ([]models.Request, error) {
+func (s *UserService) getRecentRequestsSimple(userID string, limit int) ([]models.Request, error) {
 	client := &http.Client{Timeout: 10 * time.Second}
 
-	url := fmt.Sprintf("%s/rest/v1/requests?partner_id=eq.%s&order=created_at.desc&limit=%d&select=*",
+	// Get recent requests (all statuses) with item name
+	url := fmt.Sprintf("%s/rest/v1/requests?partner_id=eq.%s&order=created_at.desc&limit=%d&select=*,items(name)",
 		s.config.SupabaseURL, userID, limit)
 
 	req, err := http.NewRequest("GET", url, nil)
@@ -420,9 +467,37 @@ func (s *UserService) getRecentRequests(userID string, limit int) ([]models.Requ
 		return nil, err
 	}
 
-	var requests []models.Request
-	if err := json.Unmarshal(body, &requests); err != nil {
+	// Parse response with nested item data
+	var rawRequests []map[string]interface{}
+	if err := json.Unmarshal(body, &rawRequests); err != nil {
 		return nil, err
+	}
+
+	var requests []models.Request
+	for _, rawRequest := range rawRequests {
+		// Convert to Request struct
+		requestJSON, _ := json.Marshal(rawRequest)
+		var request models.Request
+		if err := json.Unmarshal(requestJSON, &request); err != nil {
+			continue
+		}
+
+		// Extract item name from nested items data
+		if items, ok := rawRequest["items"].(map[string]interface{}); ok {
+			if itemName, ok := items["name"].(string); ok {
+				request.ItemName = itemName
+			}
+		}
+
+		// Populate user information for each request
+		if userInfo, err := s.getUserInfoByID(request.UserID); err == nil {
+			request.UserName = userInfo.Username
+			request.UserFullName = userInfo.FullName
+			request.UserPhone = userInfo.Phone
+			request.UserPhoto = userInfo.Photo
+		}
+
+		requests = append(requests, request)
 	}
 
 	return requests, nil
@@ -587,11 +662,72 @@ func (s *UserService) searchUsers(search, role, city string, pagination common.P
 	return users, total, nil
 }
 
+// UserInfo holds user information for dashboard
+type UserInfo struct {
+	Username string  `json:"username"`
+	FullName string  `json:"full_name"`
+	Phone    *string `json:"phone"`
+	Photo    *string `json:"photo"`
+}
+
+// getUserInfoByID retrieves user info by ID from Supabase
+func (s *UserService) getUserInfoByID(userID string) (*UserInfo, error) {
+	client := &http.Client{Timeout: 10 * time.Second}
+
+	url := fmt.Sprintf("%s/rest/v1/users?id=eq.%s&select=username,full_name,phone,photo&limit=1",
+		s.config.SupabaseURL, userID)
+
+	log.Printf("Getting user info with URL: %s", url)
+
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Set("apikey", s.config.SupabaseServiceRoleKey)
+	req.Header.Set("Authorization", "Bearer "+s.config.SupabaseServiceRoleKey)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	log.Printf("User info response status: %d, body: %s", resp.StatusCode, string(body))
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("failed to get user: status %d, body: %s", resp.StatusCode, string(body))
+	}
+
+	var users []UserInfo
+	if err := json.Unmarshal(body, &users); err != nil {
+		return nil, err
+	}
+
+	if len(users) == 0 {
+		return nil, fmt.Errorf("user not found")
+	}
+
+	return &users[0], nil
+}
+
 func (s *UserService) validateUpdateProfileRequest(req *models.UpdateUserProfileRequest) *appError.AppError {
 	// Validate username if provided
 	if req.Username != nil && *req.Username != "" {
 		if len(*req.Username) < 3 || len(*req.Username) > 30 {
 			return appError.New(appError.ErrInvalidInput, "Username must be between 3 and 30 characters")
+		}
+	}
+
+	// Validate full name if provided
+	if req.FullName != nil && *req.FullName != "" {
+		if len(*req.FullName) < 2 || len(*req.FullName) > 100 {
+			return appError.New(appError.ErrInvalidInput, "Full name must be between 2 and 100 characters")
 		}
 	}
 
@@ -699,4 +835,216 @@ func (s *UserService) updateUserProfile(userID string, req *models.UpdateUserPro
 	}
 
 	return &updatedUsers[0], nil
+}
+
+// DeleteMyAccount handles DELETE /users/me - permanently delete user account
+func (s *UserService) DeleteMyAccount(w http.ResponseWriter, r *http.Request) {
+	userID, ok := common.GetUserIDFromContext(r)
+	if !ok {
+		appError.WriteErrorResponse(w,
+			appError.New(appError.ErrUnauthorized, "Unauthorized"),
+			common.GenerateTraceID())
+		return
+	}
+
+	// Get user info to determine role
+	user, appErr := s.getUserByID(userID)
+	if appErr != nil {
+		appError.WriteErrorResponse(w, appErr, common.GenerateTraceID())
+		return
+	}
+
+	// Delete user account based on role
+	if user.Role == "partner" {
+		appErr = s.deletePartnerAccount(userID)
+	} else {
+		appErr = s.deleteUserAccount(userID)
+	}
+
+	if appErr != nil {
+		appError.WriteErrorResponse(w, appErr, common.GenerateTraceID())
+		return
+	}
+
+	// Delete from Firebase Auth
+	ctx := context.Background()
+	err := s.firebaseAuth.DeleteUser(ctx, userID)
+	if err != nil {
+		log.Printf("Failed to delete user from Firebase: %v", err)
+		// Continue anyway since Supabase deletion was successful
+	}
+
+	common.WriteSuccessResponse(w, nil, "Account deleted successfully")
+}
+
+// deletePartnerAccount deletes partner account with specific logic
+func (s *UserService) deletePartnerAccount(userID string) *appError.AppError {
+	client := &http.Client{Timeout: 30 * time.Second}
+
+	// Step 1: Soft delete requests where this partner is involved
+	// Set deleted_by_partner = true for all requests where partner_id = userID
+	requestUpdateURL := fmt.Sprintf("%s/rest/v1/requests?partner_id=eq.%s", s.config.SupabaseURL, userID)
+	requestUpdateData := map[string]interface{}{
+		"deleted_by_partner": true,
+		"updated_at":         time.Now().Format(time.RFC3339),
+	}
+
+	requestUpdateJSON, err := json.Marshal(requestUpdateData)
+	if err != nil {
+		return appError.New(appError.ErrInternal, "Failed to marshal request update data")
+	}
+
+	requestUpdateReq, err := http.NewRequest("PATCH", requestUpdateURL, bytes.NewBuffer(requestUpdateJSON))
+	if err != nil {
+		return appError.New(appError.ErrInternal, "Failed to create request update request")
+	}
+
+	requestUpdateReq.Header.Set("apikey", s.config.SupabaseServiceRoleKey)
+	requestUpdateReq.Header.Set("Authorization", "Bearer "+s.config.SupabaseServiceRoleKey)
+	requestUpdateReq.Header.Set("Content-Type", "application/json")
+
+	requestUpdateResp, err := client.Do(requestUpdateReq)
+	if err != nil {
+		log.Printf("Failed to soft delete partner requests: %v", err)
+		// Continue with deletion process
+	} else {
+		requestUpdateResp.Body.Close()
+	}
+
+	// Step 2: Delete all items owned by this partner (CASCADE will handle related requests/transactions)
+	itemDeleteURL := fmt.Sprintf("%s/rest/v1/items?partner_id=eq.%s", s.config.SupabaseURL, userID)
+	itemDeleteReq, err := http.NewRequest("DELETE", itemDeleteURL, nil)
+	if err != nil {
+		return appError.New(appError.ErrInternal, "Failed to create item delete request")
+	}
+
+	itemDeleteReq.Header.Set("apikey", s.config.SupabaseServiceRoleKey)
+	itemDeleteReq.Header.Set("Authorization", "Bearer "+s.config.SupabaseServiceRoleKey)
+
+	itemDeleteResp, err := client.Do(itemDeleteReq)
+	if err != nil {
+		return appError.New(appError.ErrDatabase, "Failed to delete partner items")
+	}
+	itemDeleteResp.Body.Close()
+
+	// Step 3: Anonymize partner data instead of deleting to preserve request history
+	// Update partner record to anonymized state
+	userUpdateURL := fmt.Sprintf("%s/rest/v1/users?id=eq.%s", s.config.SupabaseURL, userID)
+	anonymizedData := map[string]interface{}{
+		"email":                 fmt.Sprintf("deleted-partner-%s@deleted.local", userID[:8]),
+		"username":              fmt.Sprintf("deleted-partner-%s", userID[:8]),
+		"full_name":             "[Deleted Partner]",
+		"phone":                 nil,
+		"address":               nil,
+		"city":                  nil,
+		"latitude":              nil,
+		"longitude":             nil,
+		"photo":                 nil,
+		"description":           nil,
+		"is_active":             false,
+		"weekly_donation_quota": 0,
+		"weekly_donation_used":  0,
+		"updated_at":            time.Now().Format(time.RFC3339),
+	}
+
+	anonymizedJSON, err := json.Marshal(anonymizedData)
+	if err != nil {
+		return appError.New(appError.ErrInternal, "Failed to marshal anonymized partner data")
+	}
+
+	userUpdateReq, err := http.NewRequest("PATCH", userUpdateURL, bytes.NewBuffer(anonymizedJSON))
+	if err != nil {
+		return appError.New(appError.ErrInternal, "Failed to create partner update request")
+	}
+
+	userUpdateReq.Header.Set("apikey", s.config.SupabaseServiceRoleKey)
+	userUpdateReq.Header.Set("Authorization", "Bearer "+s.config.SupabaseServiceRoleKey)
+	userUpdateReq.Header.Set("Content-Type", "application/json")
+
+	userUpdateResp, err := client.Do(userUpdateReq)
+	if err != nil {
+		return appError.New(appError.ErrDatabase, "Failed to anonymize partner account")
+	}
+	userUpdateResp.Body.Close()
+
+	log.Printf("Partner account anonymized successfully: %s", userID)
+	return nil
+}
+
+// deleteUserAccount deletes regular user account with specific logic
+func (s *UserService) deleteUserAccount(userID string) *appError.AppError {
+	client := &http.Client{Timeout: 30 * time.Second}
+
+	// Step 1: Soft delete requests where this user is involved
+	// Set deleted_by_user = true for all requests where user_id = userID
+	requestUpdateURL := fmt.Sprintf("%s/rest/v1/requests?user_id=eq.%s", s.config.SupabaseURL, userID)
+	requestUpdateData := map[string]interface{}{
+		"deleted_by_user": true,
+		"updated_at":      time.Now().Format(time.RFC3339),
+	}
+
+	requestUpdateJSON, err := json.Marshal(requestUpdateData)
+	if err != nil {
+		return appError.New(appError.ErrInternal, "Failed to marshal request update data")
+	}
+
+	requestUpdateReq, err := http.NewRequest("PATCH", requestUpdateURL, bytes.NewBuffer(requestUpdateJSON))
+	if err != nil {
+		return appError.New(appError.ErrInternal, "Failed to create request update request")
+	}
+
+	requestUpdateReq.Header.Set("apikey", s.config.SupabaseServiceRoleKey)
+	requestUpdateReq.Header.Set("Authorization", "Bearer "+s.config.SupabaseServiceRoleKey)
+	requestUpdateReq.Header.Set("Content-Type", "application/json")
+
+	requestUpdateResp, err := client.Do(requestUpdateReq)
+	if err != nil {
+		log.Printf("Failed to soft delete user requests: %v", err)
+		// Continue with deletion process
+	} else {
+		requestUpdateResp.Body.Close()
+	}
+
+	// Step 2: Anonymize user data instead of deleting to preserve request history
+	// Update user record to anonymized state
+	userUpdateURL := fmt.Sprintf("%s/rest/v1/users?id=eq.%s", s.config.SupabaseURL, userID)
+	anonymizedData := map[string]interface{}{
+		"email":                 fmt.Sprintf("deleted-user-%s@deleted.local", userID[:8]),
+		"username":              fmt.Sprintf("deleted-user-%s", userID[:8]),
+		"full_name":             "[Deleted User]",
+		"phone":                 nil,
+		"address":               nil,
+		"city":                  nil,
+		"latitude":              nil,
+		"longitude":             nil,
+		"photo":                 nil,
+		"description":           nil,
+		"is_active":             false,
+		"weekly_donation_quota": 0,
+		"weekly_donation_used":  0,
+		"updated_at":            time.Now().Format(time.RFC3339),
+	}
+
+	anonymizedJSON, err := json.Marshal(anonymizedData)
+	if err != nil {
+		return appError.New(appError.ErrInternal, "Failed to marshal anonymized user data")
+	}
+
+	userUpdateReq, err := http.NewRequest("PATCH", userUpdateURL, bytes.NewBuffer(anonymizedJSON))
+	if err != nil {
+		return appError.New(appError.ErrInternal, "Failed to create user update request")
+	}
+
+	userUpdateReq.Header.Set("apikey", s.config.SupabaseServiceRoleKey)
+	userUpdateReq.Header.Set("Authorization", "Bearer "+s.config.SupabaseServiceRoleKey)
+	userUpdateReq.Header.Set("Content-Type", "application/json")
+
+	userUpdateResp, err := client.Do(userUpdateReq)
+	if err != nil {
+		return appError.New(appError.ErrDatabase, "Failed to anonymize user account")
+	}
+	userUpdateResp.Body.Close()
+
+	log.Printf("User account anonymized successfully: %s", userID)
+	return nil
 }

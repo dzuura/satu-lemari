@@ -152,6 +152,7 @@ func (d *Database) Query(ctx context.Context, query string, args ...interface{})
 // QueryTable executes a query that returns rows for a specific table
 func (d *Database) QueryTable(ctx context.Context, table string, filters map[string]string) (*Rows, error) {
 	url := fmt.Sprintf("%s/rest/v1/%s", d.config.SupabaseURL, table)
+	log.Printf("QueryTable - table: %s, filters: %+v", table, filters)
 
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
@@ -165,8 +166,16 @@ func (d *Database) QueryTable(ctx context.Context, table string, filters map[str
 	}
 	req.URL.RawQuery = q.Encode()
 
-	req.Header.Set("apikey", d.config.SupabaseKey)
-	req.Header.Set("Authorization", "Bearer "+d.config.SupabaseKey)
+	log.Printf("Final query URL: %s", req.URL.String())
+
+	// Use service role key for system operations to bypass RLS
+	if table == "fcm_tokens" || table == "notifications" {
+		req.Header.Set("apikey", d.config.SupabaseServiceRoleKey)
+		req.Header.Set("Authorization", "Bearer "+d.config.SupabaseServiceRoleKey)
+	} else {
+		req.Header.Set("apikey", d.config.SupabaseKey)
+		req.Header.Set("Authorization", "Bearer "+d.config.SupabaseKey)
+	}
 
 	resp, err := d.httpClient.Do(req)
 	if err != nil {
@@ -176,6 +185,7 @@ func (d *Database) QueryTable(ctx context.Context, table string, filters map[str
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
+		log.Printf("Query failed with status %d: %s", resp.StatusCode, string(body))
 		return nil, fmt.Errorf("query failed with status %d: %s", resp.StatusCode, string(body))
 	}
 
@@ -184,6 +194,7 @@ func (d *Database) QueryTable(ctx context.Context, table string, filters map[str
 		return nil, fmt.Errorf("failed to read response: %v", err)
 	}
 
+	log.Printf("Query response: %s", string(body))
 	return &Rows{data: body}, nil
 }
 
@@ -200,6 +211,7 @@ func (d *Database) QueryRow(ctx context.Context, query string, args ...interface
 // Insert inserts data into a table
 func (d *Database) Insert(ctx context.Context, table string, data interface{}) (*Rows, error) {
 	url := fmt.Sprintf("%s/rest/v1/%s", d.config.SupabaseURL, table)
+	log.Printf("Insert - table: %s, data: %+v", table, data)
 
 	jsonData, err := json.Marshal(data)
 	if err != nil {
@@ -211,8 +223,14 @@ func (d *Database) Insert(ctx context.Context, table string, data interface{}) (
 		return nil, fmt.Errorf("failed to create request: %v", err)
 	}
 
-	req.Header.Set("apikey", d.config.SupabaseKey)
-	req.Header.Set("Authorization", "Bearer "+d.config.SupabaseKey)
+	// Use service role key for system operations to bypass RLS
+	if table == "fcm_tokens" || table == "notifications" {
+		req.Header.Set("apikey", d.config.SupabaseServiceRoleKey)
+		req.Header.Set("Authorization", "Bearer "+d.config.SupabaseServiceRoleKey)
+	} else {
+		req.Header.Set("apikey", d.config.SupabaseKey)
+		req.Header.Set("Authorization", "Bearer "+d.config.SupabaseKey)
+	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Prefer", "return=representation")
 
@@ -224,6 +242,7 @@ func (d *Database) Insert(ctx context.Context, table string, data interface{}) (
 
 	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
+		log.Printf("Insert failed with status %d: %s", resp.StatusCode, string(body))
 		return nil, fmt.Errorf("insert failed with status %d: %s", resp.StatusCode, string(body))
 	}
 
@@ -232,6 +251,54 @@ func (d *Database) Insert(ctx context.Context, table string, data interface{}) (
 		return nil, fmt.Errorf("failed to read response: %v", err)
 	}
 
+	log.Printf("Insert response: %s", string(body))
+	return &Rows{data: body}, nil
+}
+
+// Upsert inserts or updates data in a table using Supabase upsert functionality
+func (d *Database) Upsert(ctx context.Context, table string, data interface{}, conflictColumns []string) (*Rows, error) {
+	url := fmt.Sprintf("%s/rest/v1/%s", d.config.SupabaseURL, table)
+	log.Printf("Upsert - table: %s, data: %+v, conflict_columns: %v", table, data, conflictColumns)
+
+	payload, err := json.Marshal(data)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal data: %v", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(payload))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %v", err)
+	}
+
+	// Use service role key for system operations to bypass RLS
+	if table == "fcm_tokens" || table == "notifications" {
+		req.Header.Set("apikey", d.config.SupabaseServiceRoleKey)
+		req.Header.Set("Authorization", "Bearer "+d.config.SupabaseServiceRoleKey)
+	} else {
+		req.Header.Set("apikey", d.config.SupabaseKey)
+		req.Header.Set("Authorization", "Bearer "+d.config.SupabaseKey)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Prefer", "resolution=merge-duplicates")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		log.Printf("Upsert failed with status %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("upsert failed with status %d: %s", resp.StatusCode, string(body))
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response body: %v", err)
+	}
+
+	log.Printf("Upsert response: %s", string(body))
 	return &Rows{data: body}, nil
 }
 
@@ -256,8 +323,14 @@ func (d *Database) Update(ctx context.Context, table string, filters map[string]
 	}
 	req.URL.RawQuery = q.Encode()
 
-	req.Header.Set("apikey", d.config.SupabaseKey)
-	req.Header.Set("Authorization", "Bearer "+d.config.SupabaseKey)
+	// Use service role key for system operations to bypass RLS
+	if table == "fcm_tokens" || table == "notifications" {
+		req.Header.Set("apikey", d.config.SupabaseServiceRoleKey)
+		req.Header.Set("Authorization", "Bearer "+d.config.SupabaseServiceRoleKey)
+	} else {
+		req.Header.Set("apikey", d.config.SupabaseKey)
+		req.Header.Set("Authorization", "Bearer "+d.config.SupabaseKey)
+	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Prefer", "return=representation")
 
@@ -296,8 +369,14 @@ func (d *Database) Delete(ctx context.Context, table string, filters map[string]
 	}
 	req.URL.RawQuery = q.Encode()
 
-	req.Header.Set("apikey", d.config.SupabaseKey)
-	req.Header.Set("Authorization", "Bearer "+d.config.SupabaseKey)
+	// Use service role key for system operations to bypass RLS
+	if table == "fcm_tokens" || table == "notifications" {
+		req.Header.Set("apikey", d.config.SupabaseServiceRoleKey)
+		req.Header.Set("Authorization", "Bearer "+d.config.SupabaseServiceRoleKey)
+	} else {
+		req.Header.Set("apikey", d.config.SupabaseKey)
+		req.Header.Set("Authorization", "Bearer "+d.config.SupabaseKey)
+	}
 
 	resp, err := d.httpClient.Do(req)
 	if err != nil {

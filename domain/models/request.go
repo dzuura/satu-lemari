@@ -10,27 +10,40 @@ import (
 
 // Request represents a donation or rental request
 type Request struct {
-	ID              uuid.UUID  `json:"id" db:"id"`
-	ItemID          uuid.UUID  `json:"item_id" db:"item_id"`
-	UserID          string     `json:"user_id" db:"user_id"`       // Firebase UID
-	PartnerID       string     `json:"partner_id" db:"partner_id"` // Firebase UID
-	Type            string     `json:"type" db:"type" validate:"required,oneof=donation rental"`
-	Quantity        int        `json:"quantity" db:"quantity" validate:"min=1"`
-	Reason          *string    `json:"reason,omitempty" db:"reason"`
-	ContactInfo     *string    `json:"contact_info,omitempty" db:"contact_info"`
-	PickupDate      *time.Time `json:"pickup_date,omitempty" db:"pickup_date"`
-	ReturnDate      *time.Time `json:"return_date,omitempty" db:"return_date"`
-	Status          string     `json:"status" db:"status" validate:"oneof=pending approved rejected completed returned"`
-	RejectionReason *string    `json:"rejection_reason,omitempty" db:"rejection_reason"`
-	QueuePosition   *int       `json:"queue_position,omitempty" db:"queue_position"`
-	PriorityScore   float64    `json:"priority_score" db:"priority_score"`
-	CreatedAt       time.Time  `json:"created_at" db:"created_at"`
-	UpdatedAt       time.Time  `json:"updated_at" db:"updated_at"`
+	ID               uuid.UUID  `json:"id" db:"id"`
+	ItemID           uuid.UUID  `json:"item_id" db:"item_id"`
+	UserID           string     `json:"user_id" db:"user_id"`       // Firebase UID
+	PartnerID        string     `json:"partner_id" db:"partner_id"` // Firebase UID
+	Type             string     `json:"type" db:"type" validate:"required,oneof=donation rental"`
+	Quantity         int        `json:"quantity" db:"quantity" validate:"min=1"`
+	Reason           *string    `json:"reason,omitempty" db:"reason"`
+	ContactInfo      *string    `json:"contact_info,omitempty" db:"contact_info"`
+	PickupDate       *time.Time `json:"pickup_date,omitempty" db:"pickup_date"`
+	ReturnDate       *time.Time `json:"return_date,omitempty" db:"return_date"`
+	Status           string     `json:"status" db:"status" validate:"oneof=pending approved rejected completed returned"`
+	RejectionReason  *string    `json:"rejection_reason,omitempty" db:"rejection_reason"`
+	QueuePosition    *int       `json:"queue_position,omitempty" db:"queue_position"`
+	PriorityScore    float64    `json:"priority_score" db:"priority_score"`
+	DeletedByUser    bool       `json:"deleted_by_user" db:"deleted_by_user"`
+	DeletedByPartner bool       `json:"deleted_by_partner" db:"deleted_by_partner"`
+	CreatedAt        time.Time  `json:"created_at" db:"created_at"`
+	UpdatedAt        time.Time  `json:"updated_at" db:"updated_at"`
 
 	// Relations (will be populated when needed)
 	Item    *Item        `json:"item,omitempty"`
 	User    *UserProfile `json:"user,omitempty"`
 	Partner *UserProfile `json:"partner,omitempty"`
+
+	// Additional fields for API responses
+	ItemName     string   `json:"item_name,omitempty"`
+	ItemSize     string   `json:"item_size,omitempty"`     // Item size
+	ItemPrice    *float64 `json:"item_price,omitempty"`    // For rental type only
+	ItemImages   []string `json:"item_images,omitempty"`   // Item images
+	CategoryName string   `json:"category_name,omitempty"` // Category name
+	UserName     string   `json:"user_name,omitempty"`
+	UserFullName string   `json:"user_full_name,omitempty"`
+	UserPhone    *string  `json:"user_phone,omitempty"`
+	UserPhoto    *string  `json:"user_photo"`
 }
 
 // CreateRequestRequest represents request to create a new request

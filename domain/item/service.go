@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -234,7 +235,7 @@ func (s *ItemService) UpdateItem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Parse form data
+	// Parse form data (supports both form-data and JSON)
 	formValues, files, err := common.ParseFormData(r)
 	if err != nil {
 		appError.WriteErrorResponse(w,
@@ -295,35 +296,21 @@ func (s *ItemService) UpdateItem(w http.ResponseWriter, r *http.Request) {
 		status = &statusVal
 	}
 
-	// Handle image uploads
+	// Handle image uploads with proper replacement logic
 	var imageURLs []string
 	uploadedFiles := common.GetFormFiles(files, "images")
 
 	// Check if user wants to remove all images (images field is explicitly set to empty)
 	removeImages := common.GetFormValue(formValues, "remove_images") == "true"
 
+	// Determine image update strategy
 	if len(uploadedFiles) > 0 {
-		// User uploaded new images - delete old ones first
-		if len(existing.Images) > 0 {
-			log.Printf("Deleting %d old images for item %s", len(existing.Images), itemID.String())
-			for _, imageURL := range existing.Images {
-				// Extract file path from URL
-				// URL format: https://project.supabase.co/storage/v1/object/public/items/images/filename.jpg
-				// We need to extract: images/filename.jpg
-				if strings.Contains(imageURL, "/storage/v1/object/public/items/") {
-					filePath := strings.Split(imageURL, "/storage/v1/object/public/items/")
-					if len(filePath) > 1 {
-						// Delete file from storage
-						if deleteErr := s.storage.DeleteFile("items", filePath[1]); deleteErr != nil {
-							log.Printf("Warning: Failed to delete old image %s: %v", imageURL, deleteErr)
-							// Continue with upload even if old image deletion fails
-						} else {
-							log.Printf("Successfully deleted old image: %s", imageURL)
-						}
-					}
-				}
-			}
-		}
+		// Strategy 1: Replace all images with new uploads
+		log.Printf("Replacing all images for item %s - deleting %d old images, uploading %d new images",
+			itemID.String(), len(existing.Images), len(uploadedFiles))
+
+		// Delete all existing images from storage first
+		s.deleteItemImages(existing.Images, itemID.String())
 
 		// Upload new images
 		uploadResults, uploadErr := s.storage.UploadMultipleFiles(uploadedFiles, "items", "images")
@@ -336,26 +323,20 @@ func (s *ItemService) UpdateItem(w http.ResponseWriter, r *http.Request) {
 			imageURLs = append(imageURLs, result.URL)
 		}
 
-		log.Printf("Successfully uploaded %d new images for item %s", len(imageURLs), itemID.String())
-	} else if removeImages && len(existing.Images) > 0 {
-		// User wants to remove all images (no new images uploaded)
+		log.Printf("Successfully replaced images for item %s: %d new images uploaded", itemID.String(), len(imageURLs))
+	} else if removeImages {
+		// Strategy 2: Remove all images (no new uploads)
 		log.Printf("Removing all %d images for item %s", len(existing.Images), itemID.String())
-		for _, imageURL := range existing.Images {
-			// Extract file path from URL
-			if strings.Contains(imageURL, "/storage/v1/object/public/items/") {
-				filePath := strings.Split(imageURL, "/storage/v1/object/public/items/")
-				if len(filePath) > 1 {
-					// Delete file from storage
-					if deleteErr := s.storage.DeleteFile("items", filePath[1]); deleteErr != nil {
-						log.Printf("Warning: Failed to delete image %s: %v", imageURL, deleteErr)
-					} else {
-						log.Printf("Successfully deleted image: %s", imageURL)
-					}
-				}
-			}
-		}
+
+		// Delete all existing images from storage
+		s.deleteItemImages(existing.Images, itemID.String())
+
 		// Set empty array to remove all images from database
 		imageURLs = []string{}
+	} else {
+		// Strategy 3: No image changes - keep existing images
+		imageURLs = existing.Images
+		log.Printf("No image changes for item %s - keeping %d existing images", itemID.String(), len(imageURLs))
 	}
 
 	// Create request object
@@ -711,8 +692,8 @@ func (s *ItemService) searchItems(filters SearchFilters, pagination common.Pagin
 		// Sanitize color parameter
 		color := strings.TrimSpace(filters.Color)
 		if len(color) > 0 {
-			// Use exact match for color instead of ILIKE to avoid issues
-			sqlFilters = append(sqlFilters, fmt.Sprintf("color=eq.%s", color))
+			// Use case-insensitive partial match for color to handle variations
+			sqlFilters = append(sqlFilters, fmt.Sprintf("color=ilike.*%s*", color))
 		}
 	}
 	if filters.OnlyAvailable {
@@ -787,6 +768,16 @@ func (s *ItemService) searchItems(filters SearchFilters, pagination common.Pagin
 		return nil, 0, appError.New(appError.ErrInternal, "Failed to parse response")
 	}
 
+	// Debug: Log all category IDs found in items and their names
+	for _, item := range items {
+		log.Printf("DEBUG: Item '%s' has category_id: %s", item.Name, item.CategoryID.String())
+		if categoryName, err := s.getCategoryNameByID(item.CategoryID.String()); err == nil {
+			log.Printf("DEBUG: Category ID %s = '%s'", item.CategoryID.String(), categoryName)
+		} else {
+			log.Printf("DEBUG: Failed to get category name for ID %s: %v", item.CategoryID.String(), err)
+		}
+	}
+
 	// Populate category names for each item
 	for i := range items {
 		if categoryName, err := s.getCategoryNameByID(items[i].CategoryID.String()); err == nil {
@@ -794,6 +785,9 @@ func (s *ItemService) searchItems(filters SearchFilters, pagination common.Pagin
 				ID:   items[i].CategoryID,
 				Name: categoryName,
 			}
+			log.Printf("Item %s has category: %s (ID: %s)", items[i].Name, categoryName, items[i].CategoryID.String())
+		} else {
+			log.Printf("Failed to get category name for item %s (category_id: %s): %v", items[i].Name, items[i].CategoryID.String(), err)
 		}
 	}
 
@@ -852,6 +846,13 @@ func (s *ItemService) getItemByID(itemID string) (*models.Item, *appError.AppErr
 			ID:   item.CategoryID,
 			Name: categoryName,
 		}
+	}
+
+	// Populate partner information
+	if partnerInfo, err := s.getPartnerInfo(item.PartnerID); err == nil {
+		item.Partner = partnerInfo
+	} else {
+		log.Printf("Failed to get partner info: %v", err)
 	}
 
 	return item, nil
@@ -946,9 +947,8 @@ func (s *ItemService) updateItem(itemID string, req *models.UpdateItemRequest) (
 		updateData["price"] = *req.Price
 	}
 	if req.Images != nil {
-		if len(req.Images) > 0 {
-			updateData["images"] = req.Images
-		}
+		// Allow empty array to remove all images
+		updateData["images"] = req.Images
 	}
 	if req.Size != nil {
 		updateData["size"] = *req.Size
@@ -958,6 +958,13 @@ func (s *ItemService) updateItem(itemID string, req *models.UpdateItemRequest) (
 	}
 	if req.Condition != nil {
 		updateData["condition"] = *req.Condition
+	}
+	if req.TotalQuantity != nil {
+		updateData["total_quantity"] = *req.TotalQuantity
+		// Also update available_quantity if total_quantity is being updated
+		// For safety, we'll set available_quantity to the same value
+		// In a real scenario, you might want more sophisticated logic
+		updateData["available_quantity"] = *req.TotalQuantity
 	}
 
 	jsonData, err := json.Marshal(updateData)
@@ -1165,24 +1172,68 @@ func (s *ItemService) validateCreateRequest(req *models.CreateItemRequest) *appE
 
 func (s *ItemService) validateUpdateRequest(req *models.UpdateItemRequest) *appError.AppError {
 	if req.Name != nil {
-		if len(*req.Name) < 3 || len(*req.Name) > 100 {
-			return appError.New(appError.ErrInvalidInput, "Name must be between 3 and 100 characters")
+		if len(*req.Name) < 2 || len(*req.Name) > 255 {
+			return appError.New(appError.ErrInvalidInput, "Name must be between 2 and 255 characters")
 		}
 	}
 	if req.Status != nil {
-		if !common.Contains([]string{"active", "inactive", "rented", "donated"}, *req.Status) {
-			return appError.New(appError.ErrInvalidInput, "Invalid status")
+		if !common.Contains([]string{"active", "inactive", "out_of_stock"}, *req.Status) {
+			return appError.New(appError.ErrInvalidInput, "Invalid status. Must be one of: active, inactive, out_of_stock")
 		}
 	}
 	if req.Images != nil {
-		if len(req.Images) == 0 {
-			return appError.New(appError.ErrInvalidInput, "At least one image is required")
-		}
 		if len(req.Images) > 5 {
 			return appError.New(appError.ErrInvalidInput, "Maximum 5 images allowed")
 		}
+		// Note: Empty images array is allowed for update (removes all images)
+	}
+	if req.TotalQuantity != nil {
+		if *req.TotalQuantity < 1 {
+			return appError.New(appError.ErrInvalidInput, "Total quantity must be at least 1")
+		}
+	}
+	if req.Condition != nil {
+		if !common.Contains([]string{"excellent", "good", "fair"}, *req.Condition) {
+			return appError.New(appError.ErrInvalidInput, "Invalid condition. Must be one of: excellent, good, fair")
+		}
+	}
+	if req.Size != nil {
+		if len(*req.Size) == 0 {
+			return appError.New(appError.ErrInvalidInput, "Size cannot be empty")
+		}
 	}
 	return nil
+}
+
+// deleteItemImages deletes multiple images from storage
+func (s *ItemService) deleteItemImages(imageURLs []string, itemID string) {
+	if len(imageURLs) == 0 {
+		return
+	}
+
+	log.Printf("Deleting %d images from storage for item %s", len(imageURLs), itemID)
+
+	for _, imageURL := range imageURLs {
+		// Extract file path from URL
+		// URL format: https://project.supabase.co/storage/v1/object/public/items/images/filename.jpg
+		// We need to extract: images/filename.jpg
+		if strings.Contains(imageURL, "/storage/v1/object/public/items/") {
+			filePath := strings.Split(imageURL, "/storage/v1/object/public/items/")
+			if len(filePath) > 1 {
+				// Delete file from storage
+				if deleteErr := s.storage.DeleteFile("items", filePath[1]); deleteErr != nil {
+					log.Printf("Warning: Failed to delete image %s: %v", imageURL, deleteErr)
+					// Continue with other deletions even if one fails
+				} else {
+					log.Printf("Successfully deleted image from storage: %s", imageURL)
+				}
+			} else {
+				log.Printf("Warning: Could not extract file path from URL: %s", imageURL)
+			}
+		} else {
+			log.Printf("Warning: Image URL format not recognized: %s", imageURL)
+		}
+	}
 }
 
 // getCategoryIDByName retrieves category ID by name from Supabase with flexible matching
@@ -1195,14 +1246,38 @@ func (s *ItemService) getCategoryIDByName(categoryName string) (string, error) {
 		return "", fmt.Errorf("category name cannot be empty")
 	}
 
-	// Use case-insensitive partial matching with wildcards
-	// This will match "sport" with "Sport Wear", "hoodie" with "Hoodie", etc.
-	url := fmt.Sprintf("%s/rest/v1/categories?name=ilike.*%s*&select=id,name&limit=1",
-		s.config.SupabaseURL, categoryName)
+	// Use proper URL encoding for category name
+	// Try exact match first, then fallback to partial match
+	baseURL := fmt.Sprintf("%s/rest/v1/categories", s.config.SupabaseURL)
 
-	log.Printf("Searching category with URL: %s", url)
+	// Build query parameters properly
+	params := url.Values{}
+	params.Set("select", "id,name")
+	params.Set("limit", "1")
 
-	req, err := http.NewRequest("GET", url, nil)
+	// Try exact match first (case-insensitive)
+	params.Set("name", "ilike."+categoryName)
+	exactURL := baseURL + "?" + params.Encode()
+
+	// Try exact match first
+	categoryID, err := s.searchCategoryByName(client, exactURL, categoryName, "exact")
+	if err == nil {
+		return categoryID, nil
+	}
+
+	// If exact match fails, try partial match with multiple results to find one with items
+	params.Set("name", "ilike.*"+categoryName+"*")
+	params.Set("limit", "10") // Get multiple results to check which has items
+	partialURL := baseURL + "?" + params.Encode()
+
+	log.Printf("Searching category (partial match) with URL: %s", partialURL)
+
+	return s.searchCategoryWithItemsCheck(client, partialURL, categoryName)
+}
+
+// searchCategoryByName performs the actual HTTP request to search for category
+func (s *ItemService) searchCategoryByName(client *http.Client, searchURL, categoryName, matchType string) (string, error) {
+	req, err := http.NewRequest("GET", searchURL, nil)
 	if err != nil {
 		return "", err
 	}
@@ -1218,7 +1293,7 @@ func (s *ItemService) getCategoryIDByName(categoryName string) (string, error) {
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		log.Printf("Failed to get category: status %d, body: %s", resp.StatusCode, string(body))
+		log.Printf("Failed to get category (%s): status %d, body: %s", matchType, resp.StatusCode, string(body))
 		return "", fmt.Errorf("failed to get category")
 	}
 
@@ -1227,7 +1302,7 @@ func (s *ItemService) getCategoryIDByName(categoryName string) (string, error) {
 		return "", err
 	}
 
-	log.Printf("Category search response: %s", string(body))
+	log.Printf("Category search response (%s): %s", matchType, string(body))
 
 	var categories []struct {
 		ID   string `json:"id"`
@@ -1235,17 +1310,135 @@ func (s *ItemService) getCategoryIDByName(categoryName string) (string, error) {
 	}
 
 	if err := json.Unmarshal(body, &categories); err != nil {
-		log.Printf("Failed to parse category response: %v", err)
+		log.Printf("Failed to parse category response (%s): %v", matchType, err)
 		return "", err
 	}
 
 	if len(categories) == 0 {
-		log.Printf("No category found for search term: %s", categoryName)
+		log.Printf("No category found for search term: %s (match type: %s)", categoryName, matchType)
 		return "", fmt.Errorf("category not found")
 	}
 
-	log.Printf("Found category: %s (ID: %s) for search term: %s", categories[0].Name, categories[0].ID, categoryName)
+	log.Printf("Found category: %s (ID: %s) for search term: %s (match type: %s)",
+		categories[0].Name, categories[0].ID, categoryName, matchType)
 	return categories[0].ID, nil
+}
+
+// searchCategoryWithItemsCheck searches for categories and prioritizes ones that have items
+func (s *ItemService) searchCategoryWithItemsCheck(client *http.Client, searchURL, categoryName string) (string, error) {
+	req, err := http.NewRequest("GET", searchURL, nil)
+	if err != nil {
+		return "", err
+	}
+
+	req.Header.Set("apikey", s.config.SupabaseServiceRoleKey)
+	req.Header.Set("Authorization", "Bearer "+s.config.SupabaseServiceRoleKey)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		log.Printf("Failed to get categories (partial): status %d, body: %s", resp.StatusCode, string(body))
+		return "", fmt.Errorf("failed to get categories")
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+
+	log.Printf("Category search response (partial with items check): %s", string(body))
+
+	var categories []struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	}
+
+	if err := json.Unmarshal(body, &categories); err != nil {
+		log.Printf("Failed to parse categories response: %v", err)
+		return "", err
+	}
+
+	if len(categories) == 0 {
+		log.Printf("No categories found for search term: %s", categoryName)
+		return "", fmt.Errorf("category not found")
+	}
+
+	// Check each category to see if it has items
+	for _, category := range categories {
+		itemCount, err := s.getItemCountByCategory(category.ID)
+		if err != nil {
+			log.Printf("Failed to check item count for category %s (%s): %v", category.Name, category.ID, err)
+			continue
+		}
+
+		log.Printf("Category %s (ID: %s) has %d items", category.Name, category.ID, itemCount)
+
+		if itemCount > 0 {
+			log.Printf("Found category with items: %s (ID: %s, items: %d) for search term: %s",
+				category.Name, category.ID, itemCount, categoryName)
+			return category.ID, nil
+		}
+	}
+
+	// If no category has items, return the first one as fallback
+	log.Printf("No categories with items found, using first result: %s (ID: %s) for search term: %s",
+		categories[0].Name, categories[0].ID, categoryName)
+	return categories[0].ID, nil
+}
+
+// getItemCountByCategory returns the number of items in a specific category
+func (s *ItemService) getItemCountByCategory(categoryID string) (int, error) {
+	url := fmt.Sprintf("%s/rest/v1/items?category_id=eq.%s&select=id", s.config.SupabaseURL, categoryID)
+
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return 0, err
+	}
+
+	req.Header.Set("apikey", s.config.SupabaseServiceRoleKey)
+	req.Header.Set("Authorization", "Bearer "+s.config.SupabaseServiceRoleKey)
+	req.Header.Set("Prefer", "count=exact")
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("failed to get item count: status %d", resp.StatusCode)
+	}
+
+	// Get count from Content-Range header
+	contentRange := resp.Header.Get("Content-Range")
+	if contentRange != "" {
+		// Parse "0-4/5" format to get total count
+		parts := strings.Split(contentRange, "/")
+		if len(parts) == 2 {
+			if count, err := strconv.Atoi(parts[1]); err == nil {
+				return count, nil
+			}
+		}
+	}
+
+	// Fallback: count items in response body
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0, err
+	}
+
+	var items []map[string]interface{}
+	if err := json.Unmarshal(body, &items); err != nil {
+		return 0, err
+	}
+
+	return len(items), nil
 }
 
 // getCategoryNameByID retrieves category name by ID from Supabase
@@ -1286,4 +1479,50 @@ func (s *ItemService) getCategoryNameByID(categoryID string) (string, error) {
 	}
 
 	return categories[0].Name, nil
+}
+
+// getPartnerInfo retrieves partner information by ID from Supabase
+func (s *ItemService) getPartnerInfo(partnerID string) (*models.UserProfile, error) {
+	client := &http.Client{Timeout: 10 * time.Second}
+
+	url := fmt.Sprintf("%s/rest/v1/users?id=eq.%s&select=id,username,full_name,latitude,longitude,phone,city,address,photo,created_at&limit=1",
+		s.config.SupabaseURL, partnerID)
+
+	log.Printf("Getting partner info with URL: %s", url)
+
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Set("apikey", s.config.SupabaseServiceRoleKey)
+	req.Header.Set("Authorization", "Bearer "+s.config.SupabaseServiceRoleKey)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	log.Printf("Partner info response status: %d, body: %s", resp.StatusCode, string(body))
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("failed to get partner: status %d, body: %s", resp.StatusCode, string(body))
+	}
+
+	var users []models.UserProfile
+	if err := json.Unmarshal(body, &users); err != nil {
+		return nil, err
+	}
+
+	if len(users) == 0 {
+		return nil, fmt.Errorf("partner not found")
+	}
+
+	return &users[0], nil
 }

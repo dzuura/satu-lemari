@@ -22,26 +22,29 @@ import (
 	"github.com/dzuura/satu-lemari/domain/item"
 	"github.com/dzuura/satu-lemari/domain/logging"
 	"github.com/dzuura/satu-lemari/domain/middleware"
+	"github.com/dzuura/satu-lemari/domain/notification"
 	"github.com/dzuura/satu-lemari/domain/requests"
 	"github.com/dzuura/satu-lemari/domain/security"
 	"github.com/dzuura/satu-lemari/domain/user"
 )
 
 type Server struct {
-	config          *config.Config
-	authService     *auth.AuthService
-	userService     *user.UserService
-	categoryService *category.CategoryService
-	itemService     *item.ItemService
-	requestService  *requests.RequestService
-	aiService       *ai.AIServiceManager
-	aiHandler       *ai.AIServiceHandler
-	db              *database.Database
-	cache           *cache.RedisCache
-	router          *mux.Router
-	httpServer      *http.Server
-	logger          *logging.Logger
-	passwordHasher  *security.PasswordHasher
+	config              *config.Config
+	authService         *auth.AuthService
+	userService         *user.UserService
+	categoryService     *category.CategoryService
+	itemService         *item.ItemService
+	requestService      *requests.RequestService
+	notificationService *notification.NotificationService
+	notificationHandler *notification.NotificationHandler
+	aiService           *ai.AIServiceManager
+	aiHandler           *ai.AIServiceHandler
+	db                  *database.Database
+	cache               *cache.RedisCache
+	router              *mux.Router
+	httpServer          *http.Server
+	logger              *logging.Logger
+	passwordHasher      *security.PasswordHasher
 }
 
 func main() {
@@ -112,9 +115,14 @@ func NewServer(cfg *config.Config) (*Server, error) {
 
 	// Initialize services
 	authService := auth.NewAuthService(cfg)
-	userService := user.NewUserService(cfg)
+	userService := user.NewUserService(cfg, authService.GetClient())
 	categoryService := category.NewCategoryService(cfg)
 	itemService := item.NewItemService(cfg)
+
+	// Initialize quota service and start schedulers
+	quotaService := user.NewQuotaService(cfg)
+	quotaService.StartQuotaResetScheduler()
+	quotaService.StartExpiredQuotaChecker()
 
 	// Initialize AI services
 	aiService, err := ai.NewAIServiceManager(cfg)
@@ -135,8 +143,19 @@ func NewServer(cfg *config.Config) (*Server, error) {
 		aiHandler = ai.NewAIServiceHandler(cfg, aiService)
 	}
 
-	// Initialize request service
-	requestService := requests.NewRequestService(cfg)
+	// Initialize notification service and handler
+	notificationService, err := notification.NewNotificationService(cfg, redisCache, db)
+	if err != nil {
+		logger.Error("Failed to initialize notification service", map[string]interface{}{
+			"error": err.Error(),
+		})
+		return nil, err
+	}
+	logger.Info("Notification service initialized successfully", nil)
+	notificationHandler := notification.NewNotificationHandler(cfg, notificationService)
+
+	// Initialize request service with notification service
+	requestService := requests.NewRequestService(cfg, notificationService)
 
 	// Initialize router
 	router := mux.NewRouter()
@@ -144,19 +163,21 @@ func NewServer(cfg *config.Config) (*Server, error) {
 	logger.Info("All services initialized successfully", nil)
 
 	return &Server{
-		config:          cfg,
-		authService:     authService,
-		userService:     userService,
-		categoryService: categoryService,
-		itemService:     itemService,
-		requestService:  requestService,
-		aiService:       aiService,
-		aiHandler:       aiHandler,
-		db:              db,
-		cache:           redisCache,
-		router:          router,
-		logger:          logger,
-		passwordHasher:  passwordHasher,
+		config:              cfg,
+		authService:         authService,
+		userService:         userService,
+		categoryService:     categoryService,
+		itemService:         itemService,
+		requestService:      requestService,
+		notificationService: notificationService,
+		notificationHandler: notificationHandler,
+		aiService:           aiService,
+		aiHandler:           aiHandler,
+		db:                  db,
+		cache:               redisCache,
+		router:              router,
+		logger:              logger,
+		passwordHasher:      passwordHasher,
 	}, nil
 }
 
@@ -239,7 +260,7 @@ func (s *Server) registerRoutes(api *mux.Router) {
 
 	// AI routes (public - no authentication required for basic AI features)
 	if s.aiHandler != nil {
-		s.aiHandler.RegisterRoutes(publicRoutes)
+		s.registerPublicAIRoutes(publicRoutes)
 	}
 
 	// Protected routes (authentication required)
@@ -256,6 +277,7 @@ func (s *Server) registerRoutes(api *mux.Router) {
 	// Protected user routes
 	protectedRoutes.HandleFunc("/users/me", s.userService.GetMyProfile).Methods("GET")
 	protectedRoutes.HandleFunc("/users/me", s.userService.UpdateMyProfile).Methods("PUT")
+	protectedRoutes.HandleFunc("/users/me", s.userService.DeleteMyAccount).Methods("DELETE")
 	protectedRoutes.HandleFunc("/users/dashboard", s.userService.GetDashboard).Methods("GET")
 
 	// Protected item routes - order matters for routing
@@ -273,6 +295,14 @@ func (s *Server) registerRoutes(api *mux.Router) {
 	protectedRoutes.HandleFunc("/requests/{request_id}", s.requestService.GetRequestByID).Methods("GET")
 	protectedRoutes.HandleFunc("/requests/{request_id}", s.requestService.UpdateRequest).Methods("PUT")
 	protectedRoutes.HandleFunc("/requests/{request_id}", s.requestService.DeleteRequest).Methods("DELETE")
+
+	// Protected notification routes
+	s.notificationHandler.RegisterRoutes(protectedRoutes)
+
+	// Protected AI routes (authentication required)
+	if s.aiHandler != nil {
+		s.registerProtectedAIRoutes(protectedRoutes)
+	}
 
 	// Admin only routes
 	adminRoutes := api.PathPrefix("").Subrouter()
@@ -435,4 +465,32 @@ func (s *Server) cleanup() {
 			log.Printf("Error closing Redis: %v", err)
 		}
 	}
+}
+
+// registerPublicAIRoutes registers AI routes that don't require authentication
+func (s *Server) registerPublicAIRoutes(router *mux.Router) {
+	// AI Smart Listing endpoints (public)
+	router.HandleFunc("/ai/smart-listing", s.aiHandler.SmartListing).Methods("POST")
+	router.HandleFunc("/ai/smart-listing/batch", s.aiHandler.BatchSmartListing).Methods("POST")
+
+	// AI Intent Matching endpoints (public)
+	router.HandleFunc("/ai/intent", s.aiHandler.ParseIntent).Methods("POST")
+	router.HandleFunc("/ai/suggestions", s.aiHandler.GetSuggestions).Methods("GET")
+
+	// AI Status and info (public)
+	router.HandleFunc("/ai/status", s.aiHandler.GetAIStatus).Methods("GET")
+
+	// Legacy AI endpoints (public for backward compatibility)
+	router.HandleFunc("/ai/analyze", s.aiHandler.AnalyzeItem).Methods("POST")
+	router.HandleFunc("/ai/recommendations", s.aiHandler.GetRecommendations).Methods("POST")
+
+	// Public AI recommendation endpoints (no auth required)
+	router.HandleFunc("/ai/recommendations/similar/{id}", s.aiHandler.GetSimilarItems).Methods("GET")
+	router.HandleFunc("/ai/recommendations/trending", s.aiHandler.GetTrendingRecommendations).Methods("GET")
+}
+
+// registerProtectedAIRoutes registers AI routes that require authentication
+func (s *Server) registerProtectedAIRoutes(router *mux.Router) {
+	// Enhanced AI Recommendation endpoints (authentication required)
+	router.HandleFunc("/ai/recommendations/personalized", s.aiHandler.GetPersonalizedRecommendations).Methods("GET")
 }
