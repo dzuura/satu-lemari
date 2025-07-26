@@ -2,6 +2,7 @@ package item
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -15,6 +16,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
 
+	"github.com/dzuura/satu-lemari/domain/cache"
 	"github.com/dzuura/satu-lemari/domain/common"
 	"github.com/dzuura/satu-lemari/domain/config"
 	appError "github.com/dzuura/satu-lemari/domain/error"
@@ -23,8 +25,9 @@ import (
 )
 
 type ItemService struct {
-	config  *config.Config
-	storage *storage.SupabaseStorage
+	config      *config.Config
+	storage     *storage.SupabaseStorage
+	cacheHelper *ItemCacheHelper
 }
 
 type SearchFilters struct {
@@ -47,10 +50,16 @@ type SearchFilters struct {
 	SortOrder     string
 }
 
-func NewItemService(cfg *config.Config) *ItemService {
+func NewItemService(cfg *config.Config, redisCache *cache.RedisCache) *ItemService {
+	var cacheHelper *ItemCacheHelper
+	if redisCache != nil {
+		cacheHelper = NewItemCacheHelper(redisCache)
+	}
+
 	return &ItemService{
-		config:  cfg,
-		storage: storage.NewSupabaseStorage(cfg),
+		config:      cfg,
+		storage:     storage.NewSupabaseStorage(cfg),
+		cacheHelper: cacheHelper,
 	}
 }
 
@@ -805,6 +814,14 @@ func (s *ItemService) searchItems(filters SearchFilters, pagination common.Pagin
 }
 
 func (s *ItemService) getItemByID(itemID string) (*models.Item, *appError.AppError) {
+	// Try to get from cache first
+	if s.cacheHelper != nil && s.cacheHelper.ShouldUseCache() {
+		ctx := context.Background()
+		if cachedItem, err := s.cacheHelper.GetItemDetails(ctx, itemID); err == nil {
+			return cachedItem, nil
+		}
+	}
+
 	client := &http.Client{Timeout: 10 * time.Second}
 
 	url := fmt.Sprintf("%s/rest/v1/items?id=eq.%s&select=id,name,description,category_id,type,status,price,images,size,color,condition,partner_id,total_quantity,available_quantity,created_at,updated_at", s.config.SupabaseURL, itemID)
@@ -853,6 +870,14 @@ func (s *ItemService) getItemByID(itemID string) (*models.Item, *appError.AppErr
 		item.Partner = partnerInfo
 	} else {
 		log.Printf("Failed to get partner info: %v", err)
+	}
+
+	// Cache the item details
+	if s.cacheHelper != nil && s.cacheHelper.ShouldUseCache() {
+		ctx := context.Background()
+		if err := s.cacheHelper.CacheItemDetails(ctx, itemID, item); err != nil {
+			log.Printf("Failed to cache item details: %v", err)
+		}
 	}
 
 	return item, nil

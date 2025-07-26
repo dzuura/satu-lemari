@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dzuura/satu-lemari/domain/cache"
 	"github.com/dzuura/satu-lemari/domain/common"
 	"github.com/dzuura/satu-lemari/domain/config"
 	appError "github.com/dzuura/satu-lemari/domain/error"
@@ -414,15 +415,22 @@ func getUserIDFromProfile(profile map[string]interface{}) string {
 
 // AIServiceHandler handles AI-related HTTP requests
 type AIServiceHandler struct {
-	config *config.Config
-	ai     *AIServiceManager
+	config      *config.Config
+	ai          *AIServiceManager
+	cacheHelper *AICacheHelper
 }
 
 // NewAIServiceHandler creates a new AI service handler
-func NewAIServiceHandler(cfg *config.Config, aiManager *AIServiceManager) *AIServiceHandler {
+func NewAIServiceHandler(cfg *config.Config, aiManager *AIServiceManager, redisCache *cache.RedisCache) *AIServiceHandler {
+	var cacheHelper *AICacheHelper
+	if redisCache != nil {
+		cacheHelper = NewAICacheHelper(redisCache)
+	}
+
 	return &AIServiceHandler{
-		config: cfg,
-		ai:     aiManager,
+		config:      cfg,
+		ai:          aiManager,
+		cacheHelper: cacheHelper,
 	}
 }
 
@@ -709,8 +717,19 @@ func (h *AIServiceHandler) GetTrendingRecommendations(w http.ResponseWriter, r *
 		limit = 10
 	}
 
-	// Get trending items using enhanced service
 	ctx := context.Background()
+
+	// Try to get from cache first
+	if h.cacheHelper != nil && h.cacheHelper.ShouldUseCache() {
+		var cachedResponse map[string]interface{}
+		if err := h.cacheHelper.GetTrending(ctx, limit, &cachedResponse); err == nil {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(cachedResponse)
+			return
+		}
+	}
+
+	// Get trending items using enhanced service
 	if h.ai.recommendationService != nil {
 		recommendations, err := h.ai.recommendationService.GetTrendingRecommendations(ctx, limit)
 		if err != nil {
@@ -725,6 +744,13 @@ func (h *AIServiceHandler) GetTrendingRecommendations(w http.ResponseWriter, r *
 			"trending_items": recommendations,
 			"count":          len(recommendations),
 			"generated_at":   time.Now().Format(time.RFC3339),
+		}
+
+		// Cache the response
+		if h.cacheHelper != nil && h.cacheHelper.ShouldUseCache() {
+			if err := h.cacheHelper.CacheTrending(ctx, limit, response); err != nil {
+				log.Printf("Failed to cache trending recommendations: %v", err)
+			}
 		}
 
 		common.WriteSuccessResponse(w, response, "Trending recommendations generated successfully")

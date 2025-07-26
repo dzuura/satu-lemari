@@ -115,9 +115,9 @@ func NewServer(cfg *config.Config) (*Server, error) {
 
 	// Initialize services
 	authService := auth.NewAuthService(cfg)
-	userService := user.NewUserService(cfg, authService.GetClient())
-	categoryService := category.NewCategoryService(cfg)
-	itemService := item.NewItemService(cfg)
+	userService := user.NewUserService(cfg, authService.GetClient(), redisCache)
+	categoryService := category.NewCategoryService(cfg, redisCache)
+	itemService := item.NewItemService(cfg, redisCache)
 
 	// Initialize quota service and start schedulers
 	quotaService := user.NewQuotaService(cfg)
@@ -140,7 +140,7 @@ func NewServer(cfg *config.Config) (*Server, error) {
 	// Initialize AI handler
 	var aiHandler *ai.AIServiceHandler
 	if aiService != nil {
-		aiHandler = ai.NewAIServiceHandler(cfg, aiService)
+		aiHandler = ai.NewAIServiceHandler(cfg, aiService, redisCache)
 	}
 
 	// Initialize notification service and handler

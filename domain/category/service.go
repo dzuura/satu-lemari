@@ -2,6 +2,7 @@ package category
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -13,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
 
+	"github.com/dzuura/satu-lemari/domain/cache"
 	"github.com/dzuura/satu-lemari/domain/common"
 	"github.com/dzuura/satu-lemari/domain/config"
 	appError "github.com/dzuura/satu-lemari/domain/error"
@@ -21,13 +23,20 @@ import (
 
 // CategoryService handles category operations
 type CategoryService struct {
-	config *config.Config
+	config      *config.Config
+	cacheHelper *CategoryCacheHelper
 }
 
 // NewCategoryService creates a new category service
-func NewCategoryService(cfg *config.Config) *CategoryService {
+func NewCategoryService(cfg *config.Config, redisCache *cache.RedisCache) *CategoryService {
+	var cacheHelper *CategoryCacheHelper
+	if redisCache != nil {
+		cacheHelper = NewCategoryCacheHelper(redisCache)
+	}
+
 	return &CategoryService{
-		config: cfg,
+		config:      cfg,
+		cacheHelper: cacheHelper,
 	}
 }
 
@@ -219,6 +228,14 @@ func (s *CategoryService) DeleteCategory(w http.ResponseWriter, r *http.Request)
 
 // searchCategories searches categories with filters and pagination
 func (s *CategoryService) searchCategories(search, isActive string, pagination common.PaginationParams) ([]models.Category, int, *appError.AppError) {
+	// Try to get from cache first
+	if s.cacheHelper != nil && s.cacheHelper.ShouldUseCache() {
+		ctx := context.Background()
+		if cachedCategories, cachedTotal, err := s.cacheHelper.GetCategoryList(ctx, search, isActive, pagination.Page, pagination.Limit); err == nil {
+			return cachedCategories, cachedTotal, nil
+		}
+	}
+
 	client := &http.Client{Timeout: 10 * time.Second}
 
 	// Build query parameters
@@ -308,6 +325,14 @@ func (s *CategoryService) searchCategories(search, isActive string, pagination c
 	countURL := fmt.Sprintf("%s/rest/v1/categories?%s", s.config.SupabaseURL, countQueryString)
 
 	total, _ := s.getCount(client, countURL)
+
+	// Cache the results
+	if s.cacheHelper != nil && s.cacheHelper.ShouldUseCache() {
+		ctx := context.Background()
+		if err := s.cacheHelper.CacheCategoryList(ctx, search, isActive, pagination.Page, pagination.Limit, categories, total); err != nil {
+			log.Printf("Failed to cache category list: %v", err)
+		}
+	}
 
 	return categories, total, nil
 }

@@ -71,7 +71,7 @@ SatuLemari/
 - PostgreSQL database (Supabase)
 - Redis server
 - Firebase project
-- Google Gemini API key (opsional)
+- Google Gemini API key
 
 ## 🔧 Setup & Installation
 
@@ -238,59 +238,6 @@ Authorization: Bearer <firebase_id_token>
 - `POST /notifications/fcm/subscribe` - Subscribe to topic
 - `POST /notifications/fcm/unsubscribe` - Unsubscribe from topic
 - `GET /notifications/health` - Notification service health check
-
-## 🧪 Testing dengan Postman
-
-1. Import collection dari `docs/SatuLemari API.postman_collection.json`
-2. Setup environment variables:
-   - `base_url`: `http://localhost:8080`
-   - `firebase_id_token`: Token dari Firebase Auth
-   - `access_token`: Token dari endpoint `/auth/verify`
-
-## 🔔 Notification System (v1.1.0)
-
-Sistem notifikasi lengkap dengan multiple channels dan template system:
-
-### Features
-
-- **In-App Notifications**: Notifikasi real-time dalam aplikasi
-- **FCM Push Notifications**: Push notifications untuk mobile devices
-- **Email Notifications**: Email notifications dengan template HTML
-- **Template System**: Pre-defined templates dengan placeholder substitution
-- **Bulk Operations**: Send notifications ke multiple users sekaligus
-- **Topic Subscriptions**: FCM topic-based notifications
-- **Auto-triggered**: Automatic notifications untuk request status changes
-
-
-## 🆕 Recent Updates
-
-### v1.2.0 - Latest Features
-
-#### AI Recommendations Enhancement
-
-- ✅ **Personalized Recommendations**: `/ai/recommendations/personalized` dengan AI-powered personalization
-- ✅ **Similar Items**: `/ai/recommendations/similar/{id}` untuk rekomendasi item serupa
-- ✅ **Trending Items**: `/ai/recommendations/trending` untuk item yang sedang trending
-- ✅ **Fallback Protection**: Automatic fallback ke database-only jika AI mengembalikan data invalid
-
-#### User Management Improvements
-
-- ✅ **Account Deletion**: Endpoint `DELETE /users/me` dengan data anonymization
-- ✅ **Request History Preservation**: Riwayat transaksi tetap terjaga setelah account deletion
-- ✅ **Smart Anonymization**: Partner/user yang dihapus muncul sebagai `[Deleted Partner/User]`
-
-#### Dashboard Enhancements
-
-- ✅ **Dashboard Restructure**: Stats di atas, recent requests & items di tengah, meta di bawah
-- ✅ **Recent Requests Filter**: Hanya menampilkan 5 request terbaru (semua status)
-- ✅ **Simplified Pagination**: Removed pagination dari recent requests untuk simplicity
-
-#### Technical Improvements
-
-- ✅ **Firebase Integration**: Full Firebase Auth integration untuk account deletion
-- ✅ **Database Optimization**: Improved query performance dengan proper indexing
-- ✅ **Error Handling**: Enhanced error handling untuk edge cases
-- ✅ **Code Quality**: Removed unused functions dan improved code structure
 
 ## 🤝 Contributing
 

@@ -14,6 +14,7 @@ import (
 	"firebase.google.com/go/v4/auth"
 	"github.com/gorilla/mux"
 
+	"github.com/dzuura/satu-lemari/domain/cache"
 	"github.com/dzuura/satu-lemari/domain/common"
 	"github.com/dzuura/satu-lemari/domain/config"
 	appError "github.com/dzuura/satu-lemari/domain/error"
@@ -24,13 +25,15 @@ type UserService struct {
 	config        *config.Config
 	fileUploadSvc *common.FileUploadService
 	firebaseAuth  *auth.Client
+	cache         *cache.RedisCache
 }
 
-func NewUserService(cfg *config.Config, firebaseAuth *auth.Client) *UserService {
+func NewUserService(cfg *config.Config, firebaseAuth *auth.Client, redisCache *cache.RedisCache) *UserService {
 	return &UserService{
 		config:        cfg,
 		fileUploadSvc: common.NewFileUploadService(cfg.SupabaseURL, cfg.SupabaseServiceRoleKey),
 		firebaseAuth:  firebaseAuth,
+		cache:         redisCache,
 	}
 }
 
@@ -280,10 +283,20 @@ func (s *UserService) SearchUsers(w http.ResponseWriter, r *http.Request) {
 // Helper methods
 
 func (s *UserService) getUserByID(userID string) (*models.User, *appError.AppError) {
+	// Try to get from cache first
+	ctx := context.Background()
+	cacheKey := s.cache.GenerateKey(cache.KeyUserProfile, userID)
+
+	var cachedUser models.User
+	if err := s.cache.Get(ctx, cacheKey, &cachedUser); err == nil {
+		log.Printf("User %s retrieved from cache", userID)
+		return &cachedUser, nil
+	}
+
 	client := &http.Client{Timeout: 10 * time.Second}
 
 	url := fmt.Sprintf("%s/rest/v1/users?id=eq.%s&select=*", s.config.SupabaseURL, userID)
-	log.Printf("Getting user by ID: %s", userID)
+	log.Printf("Getting user by ID from database: %s", userID)
 	log.Printf("URL: %s", url)
 
 	req, err := http.NewRequest("GET", url, nil)
@@ -325,10 +338,29 @@ func (s *UserService) getUserByID(userID string) (*models.User, *appError.AppErr
 		return nil, appError.ErrUserNotFound
 	}
 
-	return &users[0], nil
+	user := &users[0]
+
+	// Cache the user data for 15 minutes
+	if err := s.cache.Set(ctx, cacheKey, user, 15*time.Minute); err != nil {
+		log.Printf("Failed to cache user %s: %v", userID, err)
+	} else {
+		log.Printf("User %s cached successfully", userID)
+	}
+
+	return user, nil
 }
 
 func (s *UserService) getUserStats(userID, role string) (*models.UserStats, *appError.AppError) {
+	// Try to get from cache first
+	ctx := context.Background()
+	cacheKey := s.cache.GenerateKey(cache.KeyUserStats, userID, role)
+
+	var cachedStats models.UserStats
+	if err := s.cache.Get(ctx, cacheKey, &cachedStats); err == nil {
+		log.Printf("User stats for %s retrieved from cache", userID)
+		return &cachedStats, nil
+	}
+
 	client := &http.Client{Timeout: 10 * time.Second}
 
 	stats := &models.UserStats{}
@@ -400,6 +432,13 @@ func (s *UserService) getUserStats(userID, role string) (*models.UserStats, *app
 			stats.WeeklyQuotaUsed = user.WeeklyDonationUsed
 			stats.WeeklyQuotaRemaining = user.GetRemainingDonationQuota()
 		}
+	}
+
+	// Cache the stats for 5 minutes (stats change frequently)
+	if err := s.cache.Set(ctx, cacheKey, stats, 5*time.Minute); err != nil {
+		log.Printf("Failed to cache user stats for %s: %v", userID, err)
+	} else {
+		log.Printf("User stats for %s cached successfully", userID)
 	}
 
 	return stats, nil
