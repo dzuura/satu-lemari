@@ -17,6 +17,7 @@ import (
 	"github.com/dzuura/satu-lemari/domain/auth"
 	"github.com/dzuura/satu-lemari/domain/cache"
 	"github.com/dzuura/satu-lemari/domain/category"
+	"github.com/dzuura/satu-lemari/domain/chat"
 	"github.com/dzuura/satu-lemari/domain/config"
 	"github.com/dzuura/satu-lemari/domain/database"
 	"github.com/dzuura/satu-lemari/domain/item"
@@ -39,6 +40,8 @@ type Server struct {
 	notificationHandler *notification.NotificationHandler
 	aiService           *ai.AIServiceManager
 	aiHandler           *ai.AIServiceHandler
+	chatService         *chat.ChatService
+	chatHandler         *chat.ChatHandler
 	db                  *database.Database
 	cache               *cache.RedisCache
 	router              *mux.Router
@@ -157,6 +160,10 @@ func NewServer(cfg *config.Config) (*Server, error) {
 	// Initialize request service with notification service
 	requestService := requests.NewRequestService(cfg, notificationService)
 
+	// Initialize chat service
+	chatService := chat.NewChatService(cfg, db, redisCache, aiService, itemService, userService)
+	chatHandler := chat.NewChatHandler(chatService)
+
 	// Initialize router
 	router := mux.NewRouter()
 
@@ -173,6 +180,8 @@ func NewServer(cfg *config.Config) (*Server, error) {
 		notificationHandler: notificationHandler,
 		aiService:           aiService,
 		aiHandler:           aiHandler,
+		chatService:         chatService,
+		chatHandler:         chatHandler,
 		db:                  db,
 		cache:               redisCache,
 		router:              router,
@@ -304,6 +313,9 @@ func (s *Server) registerRoutes(api *mux.Router) {
 		s.registerProtectedAIRoutes(protectedRoutes)
 	}
 
+	// Chat routes
+	s.chatHandler.RegisterRoutes(api, authMiddleware)
+
 	// Admin only routes
 	adminRoutes := api.PathPrefix("").Subrouter()
 
@@ -390,6 +402,8 @@ func (s *Server) welcome(w http.ResponseWriter, r *http.Request) {
 			"Redis Caching",
 			"Queue System",
 			"Request Management",
+			"AI-Powered Chat Assistant",
+			"Sustainable Fashion Education",
 		},
 	}
 

@@ -24,6 +24,7 @@ type AIServiceManager struct {
 	config                *config.Config
 	geminiService         *GeminiService
 	recommendationService *RecommendationService
+	chatService           *ChatService
 }
 
 // NewAIServiceManager creates a new AI service manager powered by Gemini
@@ -40,10 +41,14 @@ func NewAIServiceManager(cfg *config.Config) (*AIServiceManager, error) {
 	// Create recommendation service
 	recommendationService := NewRecommendationService(cfg)
 
+	// Initialize chat service
+	chatService := NewChatService(cfg, geminiService)
+
 	return &AIServiceManager{
 		config:                cfg,
 		geminiService:         geminiService,
 		recommendationService: recommendationService,
+		chatService:           chatService,
 	}, nil
 }
 

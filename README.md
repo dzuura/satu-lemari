@@ -7,6 +7,7 @@ Platform donasi dan rental pakaian yang menghubungkan mitra (pemilik pakaian) de
 - **Authentication & Authorization**: Firebase Auth dengan JWT token
 - **Donasi & Rental System**: Sistem manajemen pakaian untuk donasi dan sewa
 - **AI Integration**: Smart listing assistant, intent matching, dan personalized recommendations (Gemini AI)
+- **Intelligent Chatbot**: AI-powered chatbot untuk bantuan donasi, sewa, dan edukasi fashion berkelanjutan
 - **File Storage**: Supabase Storage untuk upload gambar
 - **Real-time Notifications**: Notifikasi in-app, FCM push notifications, dan email dengan template system
 - **Geolocation Services**: Pencarian berdasarkan lokasi (latitude/longitude)
@@ -28,6 +29,7 @@ SatuLemari/
 │   ├── auth/                   # Authentication & Authorization
 │   ├── cache/                  # Redis caching
 │   ├── category/               # Category management
+│   ├── chat/                   # Intelligent chatbot system
 │   ├── common/                 # Shared utilities
 │   ├── config/                 # Configuration management
 │   ├── database/               # Database connection
@@ -209,6 +211,19 @@ Authorization: Bearer <firebase_id_token>
 - `GET /ai/recommendations/similar/{id}` - Get similar item recommendations
 - `GET /ai/recommendations/trending` - Get trending item recommendations
 - `GET /ai/recommendations/personalized` - Get personalized recommendations based on user behavior (protected)
+
+#### Chatbot
+
+- `POST /chat/start` - Start new chat session with language preference
+- `POST /chat/send` - Send message to chatbot with context
+- `GET /chat/history/{sessionId}` - Get chat history for specific session
+- `GET /chat/sessions` - Get user's chat sessions with pagination
+- `DELETE /chat/sessions/{sessionId}` - Delete chat session and all messages
+- `DELETE /chat/sessions/{sessionId}/messages` - Delete specific messages from session
+- `DELETE /chat/sessions/{sessionId}/messages/all` - Delete all messages in session
+- `DELETE /chat/history/all` - Delete all user chat history
+- `GET /chat/suggestions` - Get chat suggestions and categories (public)
+- `GET /chat/health` - Chatbot service health check
 
 #### Notifications
 

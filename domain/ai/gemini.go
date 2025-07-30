@@ -95,6 +95,54 @@ func (g *GeminiService) GetSearchSuggestions(ctx context.Context, query string) 
 	return g.parseSuggestionResponse(response)
 }
 
+// GenerateContent generates text content using Gemini API
+func (g *GeminiService) GenerateContent(ctx context.Context, prompt string) (string, error) {
+	req := &GeminiRequest{
+		Contents: []GeminiContent{
+			{
+				Parts: []GeminiPart{
+					{Text: prompt},
+				},
+			},
+		},
+	}
+
+	reqBody, err := json.Marshal(req)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal request: %v", err)
+	}
+
+	url := fmt.Sprintf("%s?key=%s", g.apiURL, g.config.GeminiAPIKey)
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewBuffer(reqBody))
+	if err != nil {
+		return "", fmt.Errorf("failed to create request: %v", err)
+	}
+
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := g.httpClient.Do(httpReq)
+	if err != nil {
+		return "", fmt.Errorf("failed to make request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("API error (status %d): %s", resp.StatusCode, body)
+	}
+
+	var result GeminiResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", fmt.Errorf("failed to decode response: %v", err)
+	}
+
+	if len(result.Candidates) == 0 || len(result.Candidates[0].Content.Parts) == 0 {
+		return "", fmt.Errorf("no content generated")
+	}
+
+	return result.Candidates[0].Content.Parts[0].Text, nil
+}
+
 // buildIntentPrompt creates a prompt for intent analysis
 func (g *GeminiService) buildIntentPrompt(query string) string {
 	return fmt.Sprintf(`
