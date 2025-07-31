@@ -40,8 +40,19 @@ func (s *AIServiceManager) GenerateResponse(ctx context.Context, prompt string, 
 }
 
 // getFallbackResponse provides a basic response when AI service is unavailable
-func (s *AIServiceManager) getFallbackResponse(_ string) (string, error) {
-	return "I apologize, but I'm currently unable to provide a detailed response. Please try again later or contact support for assistance.", nil
+func (s *AIServiceManager) getFallbackResponse(prompt string) (string, error) {
+	// Try to determine language from prompt
+	language := "id" // default to Indonesian
+	if strings.Contains(strings.ToLower(prompt), "english") ||
+		strings.Contains(strings.ToLower(prompt), "language") && strings.Contains(strings.ToLower(prompt), "en") {
+		language = "en"
+	}
+
+	if language == "en" {
+		return "I apologize, but I'm currently unable to provide a detailed response due to service limitations. Please try again later or contact support for assistance.", nil
+	}
+
+	return "Maaf, saya sedang mengalami keterbatasan layanan dan tidak dapat memberikan respons detail saat ini. Silakan coba lagi nanti atau hubungi customer service untuk bantuan.", nil
 }
 
 // ChatService handles chat functionality

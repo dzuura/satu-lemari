@@ -150,7 +150,8 @@ func (s *ChatService) SendMessage(ctx context.Context, req *SendMessageRequest) 
 		s.logger.Error("Failed to generate response", map[string]interface{}{
 			"error": err.Error(),
 		})
-		response = s.generateFallbackResponse(req.SessionID)
+		language := s.getLanguageFromSession(session)
+		response = s.generateFallbackResponse(req.SessionID, language)
 	}
 
 	// Store bot response
@@ -773,9 +774,17 @@ func (s *ChatService) generateResponse(ctx context.Context, session *ChatSession
 			return response, nil
 		}
 
-		s.logger.Warn("AI service failed, falling back to rule-based response", map[string]interface{}{
+		s.logger.Warn("AI service failed, trying knowledge base fallback", map[string]interface{}{
 			"error": err.Error(),
 		})
+
+		// Try knowledge base before rule-based fallback
+		kbResponse := s.tryKnowledgeBaseFallback(message, language)
+		if kbResponse != "" {
+			response.Message = kbResponse
+			s.addContextualQuickReplies(response, intent, language)
+			return response, nil
+		}
 	}
 
 	// Fallback to rule-based responses
@@ -1184,12 +1193,101 @@ func (s *ChatService) generateDefaultResponse(_ context.Context, response *ChatR
 	return response, nil
 }
 
+// tryKnowledgeBaseFallback tries to find response in knowledge base
+func (s *ChatService) tryKnowledgeBaseFallback(message string, language string) string {
+	// Extract keywords from message for knowledge base search
+	keywords := s.extractKeywordsForKB(message)
+
+	// Search knowledge base with extracted keywords
+	for _, keyword := range keywords {
+		kb := SearchKnowledgeBase(keyword, "")
+		if len(kb) > 0 {
+			// Found matching knowledge base entry
+			s.logger.Info("Using knowledge base fallback", map[string]interface{}{
+				"keyword":  keyword,
+				"kb_id":    kb[0].ID,
+				"language": language, // Use language parameter for logging
+			})
+
+			// TODO: In future, could filter KB responses by language
+			// For now, return the answer as-is since KB is primarily in Indonesian
+			return kb[0].Answer
+		}
+	}
+
+	// No knowledge base match found
+	s.logger.Debug("No knowledge base match found", map[string]interface{}{
+		"message":  message,
+		"keywords": keywords,
+		"language": language,
+	})
+	return ""
+}
+
+// extractKeywordsForKB extracts relevant keywords from message for knowledge base search
+func (s *ChatService) extractKeywordsForKB(message string) []string {
+	msgLower := strings.ToLower(message)
+	var keywords []string
+
+	// Define keyword mappings for knowledge base search
+	keywordMappings := map[string][]string{
+		"donasi":    {"donasi", "donation", "mendonasikan", "memberikan"},
+		"sewa":      {"sewa", "rental", "menyewa", "rent"},
+		"kuota":     {"kuota", "quota", "batas", "limit", "maksimal"},
+		"kondisi":   {"kondisi", "condition", "kualitas", "keadaan"},
+		"cara":      {"cara", "bagaimana", "how", "proses", "langkah"},
+		"perawatan": {"perawatan", "care", "merawat", "cuci", "setrika"},
+		"ukuran":    {"ukuran", "size", "sizing", "besar", "kecil"},
+		"kategori":  {"kategori", "category", "jenis", "tipe"},
+		"pencarian": {"cari", "search", "mencari", "temukan"},
+		"akun":      {"akun", "account", "profil", "profile"},
+		"bantuan":   {"bantuan", "help", "tolong", "assist"},
+	}
+
+	// Check for keyword matches
+	for kbKeyword, searchTerms := range keywordMappings {
+		for _, term := range searchTerms {
+			if strings.Contains(msgLower, term) {
+				keywords = append(keywords, kbKeyword)
+				break
+			}
+		}
+	}
+
+	// If no specific keywords found, try the message itself
+	if len(keywords) == 0 {
+		keywords = append(keywords, msgLower)
+	}
+
+	return keywords
+}
+
 // generateFallbackResponse generates fallback response for errors
-func (s *ChatService) generateFallbackResponse(sessionID string) *ChatResponse {
+func (s *ChatService) generateFallbackResponse(sessionID string, language string) *ChatResponse {
+	var message string
+	var quickReplies []QuickReply
+
+	if language == "en" {
+		message = "I apologize, but I'm currently experiencing technical difficulties. Please try again later or contact support for assistance."
+		quickReplies = []QuickReply{
+			{Text: "Try again", Payload: "retry", Icon: "🔄"},
+			{Text: "Contact support", Payload: "contact_support", Icon: "📞"},
+			{Text: "Browse categories", Payload: "view_categories", Icon: "📂"},
+		}
+	} else {
+		message = "Maaf, saya sedang mengalami gangguan teknis. Silakan coba lagi nanti atau hubungi customer service untuk bantuan."
+		quickReplies = []QuickReply{
+			{Text: "Coba lagi", Payload: "retry", Icon: "🔄"},
+			{Text: "Hubungi CS", Payload: "contact_support", Icon: "📞"},
+			{Text: "Lihat kategori", Payload: "view_categories", Icon: "📂"},
+		}
+	}
+
 	return &ChatResponse{
 		SessionID:     sessionID,
-		Message:       "Maaf, terjadi kesalahan saat memproses pesan Anda. Silakan coba lagi.",
+		Message:       message,
 		MessageType:   "text",
+		QuickReplies:  quickReplies,
 		Timestamp:     time.Now(),
 		CanContinue:   true,
 		SessionActive: true,
