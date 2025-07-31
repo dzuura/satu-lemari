@@ -210,12 +210,28 @@ func CreateNotificationFromTemplate(templateID string, data map[string]interface
 	return result, nil
 }
 
+// formatRequestType converts English request type to Indonesian
+func formatRequestType(requestType string) string {
+	switch strings.ToLower(requestType) {
+	case "donation":
+		return "donasi"
+	case "rental":
+		return "sewa"
+	default:
+		return requestType // Return original if not recognized
+	}
+}
+
 // substitutePlaceholders replaces {key} placeholders with values from data
 func substitutePlaceholders(text string, data map[string]interface{}) string {
 	result := text
 	for key, value := range data {
 		placeholder := fmt.Sprintf("{%s}", key)
 		if valueStr, ok := value.(string); ok {
+			// Special handling for 'type' field to format it to Indonesian
+			if key == "type" {
+				valueStr = formatRequestType(valueStr)
+			}
 			result = strings.ReplaceAll(result, placeholder, valueStr)
 		} else {
 			result = strings.ReplaceAll(result, placeholder, fmt.Sprintf("%v", value))
