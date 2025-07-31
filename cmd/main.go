@@ -122,10 +122,9 @@ func NewServer(cfg *config.Config) (*Server, error) {
 	categoryService := category.NewCategoryService(cfg, redisCache)
 	itemService := item.NewItemService(cfg, redisCache)
 
-	// Initialize quota service and start schedulers
+	// Initialize quota service and start dynamic scheduler
 	quotaService := user.NewQuotaService(cfg)
-	quotaService.StartQuotaResetScheduler()
-	quotaService.StartExpiredQuotaChecker()
+	quotaService.StartDynamicQuotaResetScheduler()
 
 	// Initialize AI services
 	aiService, err := ai.NewAIServiceManager(cfg)

@@ -483,6 +483,11 @@ func (s *AuthService) syncUserWithDatabase(uid, email, username, role string) (*
 
 func (s *AuthService) createUser(uid, email, username, role string) (*models.UserProfile, *appError.AppError) {
 	now := time.Now()
+
+	// Calculate initial quota reset date (7 days from registration)
+	// This ensures new users get their first quota reset exactly 7 days after registration
+	initialQuotaResetDate := now.AddDate(0, 0, 7)
+
 	newUser := map[string]interface{}{
 		"id":                    uid,
 		"email":                 email,
@@ -491,7 +496,7 @@ func (s *AuthService) createUser(uid, email, username, role string) (*models.Use
 		"is_active":             true,
 		"weekly_donation_quota": 3,
 		"weekly_donation_used":  0,
-		"quota_reset_date":      now.Format("2006-01-02"),
+		"quota_reset_date":      initialQuotaResetDate.Format("2006-01-02"),
 		"created_at":            now.Format(time.RFC3339),
 		"updated_at":            now.Format(time.RFC3339),
 	}

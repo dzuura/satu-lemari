@@ -23,7 +23,7 @@ CREATE TABLE IF NOT EXISTS users (
     is_active BOOLEAN DEFAULT true,
     weekly_donation_quota INTEGER DEFAULT 3,
     weekly_donation_used INTEGER DEFAULT 0,
-    quota_reset_date DATE DEFAULT CURRENT_DATE,
+    quota_reset_date DATE,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
