@@ -575,6 +575,11 @@ func (s *ChatService) extractSearchParams(message string) map[string]interface{}
 func (s *ChatService) searchItems(_ context.Context, _ map[string]interface{}, _, _ *float64) ([]ItemCard, error) {
 	// For now, return empty slice since we need to check item service interface
 	// This will be implemented based on actual item service methods
+	// When implemented, make sure to format condition using formatConditionForDisplay()
+
+	// Example of how to format condition when returning ItemCard:
+	// item.Condition = formatConditionForDisplay(originalCondition)
+
 	return []ItemCard{}, nil
 }
 
@@ -744,4 +749,449 @@ func (s *ChatService) getUserSessions(ctx context.Context, userID string, limit,
 	}
 
 	return sessions, total, nil
+}
+
+// generateResponse generates a response based on intent and context
+func (s *ChatService) generateResponse(ctx context.Context, session *ChatSession, message string, intent *Intent, context *ChatContext) (*ChatResponse, error) {
+	response := &ChatResponse{
+		SessionID:     session.ID,
+		MessageType:   "text",
+		Timestamp:     time.Now(),
+		CanContinue:   true,
+		SessionActive: true,
+		Metadata:      make(map[string]interface{}),
+	}
+
+	language := s.getLanguageFromSession(session)
+
+	// Try AI service first if available
+	if s.aiService != nil && s.aiService.IsGeminiAvailable() {
+		aiResponse, err := s.generateAIResponse(ctx, message, intent, context, language)
+		if err == nil && aiResponse != "" {
+			response.Message = aiResponse
+			s.addContextualQuickReplies(response, intent, language)
+			return response, nil
+		}
+
+		s.logger.Warn("AI service failed, falling back to rule-based response", map[string]interface{}{
+			"error": err.Error(),
+		})
+	}
+
+	// Fallback to rule-based responses
+	switch intent.Type {
+	case "donation":
+		return s.generateDonationResponse(ctx, response, intent, context, language)
+	case "rental":
+		return s.generateRentalResponse(ctx, response, intent, context, language)
+	case "search":
+		return s.generateSearchResponse(ctx, response, message, intent, context, language)
+	case "education":
+		return s.generateEducationResponse(ctx, response, message, intent, context, language)
+	case "help":
+		return s.generateHelpResponse(ctx, response, intent, context, language)
+	default:
+		return s.generateDefaultResponse(ctx, response, language)
+	}
+}
+
+// generateAIResponse generates response using AI service
+func (s *ChatService) generateAIResponse(ctx context.Context, message string, intent *Intent, context *ChatContext, language string) (string, error) {
+	// Build comprehensive prompt for AI
+	prompt := s.buildAIPrompt(message, intent, context, language)
+
+	// Prepare context data for AI
+	data := map[string]interface{}{
+		"intent":   intent,
+		"context":  context,
+		"language": language,
+		"platform": "SatuLemari",
+		"message":  message,
+	}
+
+	// Generate response using AI service
+	response, err := s.aiService.GenerateResponse(ctx, prompt, data)
+	if err != nil {
+		return "", fmt.Errorf("AI service error: %v", err)
+	}
+
+	return response, nil
+}
+
+// buildAIPrompt builds comprehensive prompt for AI response generation
+func (s *ChatService) buildAIPrompt(message string, intent *Intent, context *ChatContext, language string) string {
+	var prompt strings.Builder
+
+	// System context based on language
+	if language == "en" {
+		prompt.WriteString("You are an AI assistant for SatuLemari, a sustainable clothing donation and rental platform in Indonesia. ")
+		prompt.WriteString("Provide helpful, accurate, and relevant responses to user questions. ")
+		prompt.WriteString("Use natural and friendly English.\n\n")
+	} else {
+		prompt.WriteString("Kamu adalah asisten AI untuk SatuLemari, platform donasi dan sewa pakaian berkelanjutan di Indonesia. ")
+		prompt.WriteString("Berikan respons yang membantu, akurat, dan relevan dengan pertanyaan pengguna. ")
+		prompt.WriteString("Gunakan bahasa Indonesia yang natural dan ramah.\n\n")
+	}
+
+	// Platform information based on language
+	if language == "en" {
+		prompt.WriteString("SatuLemari Platform Information:\n")
+		prompt.WriteString("- Platform for clothing donation and rental\n")
+		prompt.WriteString("- Supports sustainable fashion\n")
+		prompt.WriteString("- Users can donate or rent clothing\n")
+		prompt.WriteString("- Weekly quota system for donations\n")
+		prompt.WriteString("- Various categories: formal, casual, sports, traditional, accessories\n")
+		prompt.WriteString("- Clothing conditions: Excellent, Good, Fair\n\n")
+	} else {
+		prompt.WriteString("Informasi Platform SatuLemari:\n")
+		prompt.WriteString("- Platform untuk donasi dan sewa pakaian\n")
+		prompt.WriteString("- Mendukung fashion berkelanjutan\n")
+		prompt.WriteString("- Users dapat mendonasikan atau menyewakan pakaian\n")
+		prompt.WriteString("- Sistem kuota mingguan untuk donasi\n")
+		prompt.WriteString("- Berbagai kategori: formal, kasual, olahraga, tradisional, aksesoris\n")
+		// Use formatConditionForDisplay to show proper formatting
+		excellentFormatted := formatConditionForDisplay("excellent")
+		goodFormatted := formatConditionForDisplay("good")
+		fairFormatted := formatConditionForDisplay("fair")
+		prompt.WriteString(fmt.Sprintf("- Kondisi pakaian: %s (Excellent), %s (Good), %s (Fair)\n\n",
+			excellentFormatted, goodFormatted, fairFormatted))
+	}
+
+	// Intent context
+	if intent != nil {
+		prompt.WriteString(fmt.Sprintf("Intent yang terdeteksi: %s\n", intent.Type))
+		if intent.Action != "" {
+			prompt.WriteString(fmt.Sprintf("Aksi: %s\n", intent.Action))
+		}
+	}
+
+	// Context information
+	if context != nil {
+		if context.Page != "" {
+			prompt.WriteString(fmt.Sprintf("Halaman saat ini: %s\n", context.Page))
+		}
+		if context.ItemID != "" {
+			prompt.WriteString(fmt.Sprintf("Item yang sedang dilihat: %s\n", context.ItemID))
+		}
+		if context.UserLocation != nil {
+			prompt.WriteString(fmt.Sprintf("Lokasi user: lat=%f, lng=%f\n",
+				context.UserLocation.Latitude, context.UserLocation.Longitude))
+		}
+	}
+
+	// Guidelines based on language
+	if language == "en" {
+		prompt.WriteString("\nResponse guidelines:\n")
+		prompt.WriteString("- Answer questions directly and informatively\n")
+		prompt.WriteString("- For donations: explain process, quota, accepted conditions (Excellent, Good, Fair)\n")
+		prompt.WriteString("- For rentals: explain rental process, duration, clothing conditions\n")
+		prompt.WriteString("- For search: help with categories, sizes, colors, conditions\n")
+		prompt.WriteString("- For care: provide practical tips\n")
+		prompt.WriteString("- Promote sustainable fashion practices\n")
+		prompt.WriteString("- If unsure, direct to customer service\n")
+		prompt.WriteString("- Maximum 200 words, use short paragraphs\n\n")
+	} else {
+		excellentFormatted := formatConditionForDisplay("excellent")
+		goodFormatted := formatConditionForDisplay("good")
+		fairFormatted := formatConditionForDisplay("fair")
+		prompt.WriteString("\nPanduan respons:\n")
+		prompt.WriteString("- Jawab pertanyaan secara langsung dan informatif\n")
+		prompt.WriteString(fmt.Sprintf("- Jika tentang donasi: jelaskan proses, kuota, kondisi yang diterima (%s, %s, %s)\n",
+			excellentFormatted, goodFormatted, fairFormatted))
+		prompt.WriteString("- Jika tentang sewa: jelaskan cara sewa, durasi, kondisi pakaian\n")
+		prompt.WriteString("- Jika tentang pencarian: bantu dengan kategori, ukuran, warna, kondisi\n")
+		prompt.WriteString("- Jika tentang perawatan: berikan tips praktis\n")
+		prompt.WriteString("- Promosikan praktik fashion berkelanjutan\n")
+		prompt.WriteString(fmt.Sprintf("- Gunakan istilah kondisi: %s, %s, %s (bukan Excellent, Good, Fair)\n",
+			excellentFormatted, goodFormatted, fairFormatted))
+		prompt.WriteString("- Jika tidak tahu pasti, arahkan ke customer service\n")
+		prompt.WriteString("- Maksimal 200 kata, gunakan paragraf pendek\n\n")
+	}
+
+	// User message
+	prompt.WriteString(fmt.Sprintf("Pertanyaan pengguna: \"%s\"\n\n", message))
+	prompt.WriteString("Respons:")
+
+	return prompt.String()
+}
+
+// formatConditionForDisplay formats clothing condition from English to Indonesian for display
+func formatConditionForDisplay(condition string) string {
+	switch strings.ToLower(condition) {
+	case "excellent":
+		return "Sangat Baik"
+	case "good":
+		return "Baik"
+	case "fair":
+		return "Cukup"
+	default:
+		return condition // Return original if not recognized
+	}
+}
+
+// addContextualQuickReplies adds contextual quick replies based on intent
+func (s *ChatService) addContextualQuickReplies(response *ChatResponse, intent *Intent, language string) {
+	switch intent.Type {
+	case "donation":
+		if language == "en" {
+			response.QuickReplies = []QuickReply{
+				{Text: "How to donate clothes", Payload: "donation_process", Icon: "📝"},
+				{Text: "Weekly donation quota", Payload: "donation_quota", Icon: "📊"},
+				{Text: "Accepted clothing conditions", Payload: "item_condition", Icon: "👕"},
+				{Text: "View my items", Payload: "my_items", Icon: "👔"},
+			}
+		} else {
+			response.QuickReplies = []QuickReply{
+				{Text: "Cara mendonasikan pakaian", Payload: "donation_process", Icon: "📝"},
+				{Text: "Kuota donasi mingguan", Payload: "donation_quota", Icon: "📊"},
+				{Text: "Kondisi pakaian yang diterima", Payload: "item_condition", Icon: "👕"},
+				{Text: "Lihat item saya", Payload: "my_items", Icon: "👔"},
+			}
+		}
+	case "rental":
+		if language == "en" {
+			response.QuickReplies = []QuickReply{
+				{Text: "How to rent clothes", Payload: "rental_process", Icon: "🔄"},
+				{Text: "Rental duration", Payload: "rental_duration", Icon: "⏰"},
+				{Text: "Search rental clothes", Payload: "search_rental", Icon: "🔍"},
+				{Text: "My rental history", Payload: "my_rentals", Icon: "📋"},
+			}
+		} else {
+			response.QuickReplies = []QuickReply{
+				{Text: "Cara menyewa pakaian", Payload: "rental_process", Icon: "🔄"},
+				{Text: "Durasi sewa", Payload: "rental_duration", Icon: "⏰"},
+				{Text: "Cari pakaian sewa", Payload: "search_rental", Icon: "🔍"},
+				{Text: "Riwayat sewa saya", Payload: "my_rentals", Icon: "📋"},
+			}
+		}
+	case "search":
+		response.QuickReplies = []QuickReply{
+			{Text: "Lihat semua kategori", Payload: "view_categories", Icon: "📂"},
+			{Text: "Pakaian formal", Payload: "search_formal", Icon: "👔"},
+			{Text: "Pakaian kasual", Payload: "search_casual", Icon: "👕"},
+			{Text: "Aksesoris", Payload: "search_accessories", Icon: "👜"},
+		}
+	case "education":
+		response.QuickReplies = []QuickReply{
+			{Text: "Perawatan pakaian", Payload: "clothing_care", Icon: "🧺"},
+			{Text: "Fashion berkelanjutan", Payload: "sustainable_fashion", Icon: "♻️"},
+			{Text: "Tips styling", Payload: "styling_tips", Icon: "💄"},
+			{Text: "Organisasi lemari", Payload: "wardrobe_organization", Icon: "🗂️"},
+		}
+	default:
+		response.QuickReplies = []QuickReply{
+			{Text: "Donasi", Payload: "donation_help", Icon: "💝"},
+			{Text: "Sewa", Payload: "rental_help", Icon: "👗"},
+			{Text: "Cari pakaian", Payload: "search_help", Icon: "🔍"},
+			{Text: "Tips perawatan", Payload: "care_tips", Icon: "🧺"},
+		}
+	}
+}
+
+// generateWelcomeMessage generates welcome message based on language
+func (s *ChatService) generateWelcomeMessage(language string) string {
+	if language == "en" {
+		return "Hello! I'm SatuLemari assistant. I can help you with clothing donations, rentals, care tips, and sustainable fashion. How can I assist you today?"
+	}
+
+	return "Halo! Saya asisten SatuLemari. Saya dapat membantu Anda dengan donasi pakaian, sewa, tips perawatan, dan fashion berkelanjutan. Ada yang bisa saya bantu?"
+}
+
+// generateDonationResponse generates response for donation-related queries (fallback)
+func (s *ChatService) generateDonationResponse(_ context.Context, response *ChatResponse, _ *Intent, _ *ChatContext, language string) (*ChatResponse, error) {
+	// Try knowledge base as last resort
+	kb := SearchKnowledgeBase("donasi", "donation")
+
+	if len(kb) > 0 {
+		response.Message = kb[0].Answer
+	} else {
+		if language == "en" {
+			response.Message = "I can help you with clothing donations. You can donate clothes in good condition to help others in need. Would you like to know more about the donation process?"
+		} else {
+			response.Message = "Saya dapat membantu Anda dengan donasi pakaian. Anda dapat mendonasikan pakaian dalam kondisi baik untuk membantu orang yang membutuhkan. Apakah Anda ingin tahu lebih lanjut tentang proses donasi?"
+		}
+	}
+
+	response.QuickReplies = []QuickReply{
+		{Text: "Cara mendonasikan pakaian", Payload: "donation_process", Icon: "📝"},
+		{Text: "Kuota donasi mingguan", Payload: "donation_quota", Icon: "📊"},
+		{Text: "Kondisi pakaian yang diterima", Payload: "item_condition", Icon: "👕"},
+		{Text: "Lihat item saya", Payload: "my_items", Icon: "👔"},
+	}
+
+	return response, nil
+}
+
+// generateRentalResponse generates response for rental-related queries (fallback)
+func (s *ChatService) generateRentalResponse(_ context.Context, response *ChatResponse, _ *Intent, _ *ChatContext, language string) (*ChatResponse, error) {
+	// Try knowledge base as last resort
+	kb := SearchKnowledgeBase("sewa", "rental")
+
+	if len(kb) > 0 {
+		response.Message = kb[0].Answer
+	} else {
+		if language == "en" {
+			response.Message = "I can help you with clothing rentals. You can rent clothes for special occasions or events. Would you like to search for available rental items?"
+		} else {
+			response.Message = "Saya dapat membantu Anda dengan sewa pakaian. Anda dapat menyewa pakaian untuk acara khusus atau event. Apakah Anda ingin mencari item sewa yang tersedia?"
+		}
+	}
+
+	response.QuickReplies = []QuickReply{
+		{Text: "Cara menyewa pakaian", Payload: "rental_process", Icon: "🔄"},
+		{Text: "Durasi sewa", Payload: "rental_duration", Icon: "⏰"},
+		{Text: "Cari pakaian sewa", Payload: "search_rental", Icon: "🔍"},
+		{Text: "Riwayat sewa saya", Payload: "my_rentals", Icon: "📋"},
+	}
+
+	return response, nil
+}
+
+// generateSearchResponse generates response for search-related queries (fallback)
+func (s *ChatService) generateSearchResponse(ctx context.Context, response *ChatResponse, message string, _ *Intent, context *ChatContext, language string) (*ChatResponse, error) {
+	// Extract search parameters from message
+	searchParams := s.extractSearchParams(message)
+
+	// Get user location if available
+	var userLat, userLng *float64
+	if context != nil && context.UserLocation != nil {
+		userLat = &context.UserLocation.Latitude
+		userLng = &context.UserLocation.Longitude
+	}
+
+	// Search for items
+	items, err := s.searchItems(ctx, searchParams, userLat, userLng)
+	if err != nil {
+		s.logger.Warn("Failed to search items", map[string]interface{}{
+			"error": err.Error(),
+		})
+
+		if language == "en" {
+			response.Message = "I'm having trouble searching for items right now. Please try again later or browse our categories."
+		} else {
+			response.Message = "Saya mengalami kesulitan mencari item saat ini. Silakan coba lagi nanti atau jelajahi kategori kami."
+		}
+		return response, nil
+	}
+
+	if len(items) == 0 {
+		if language == "en" {
+			response.Message = "I couldn't find any items matching your search. Try adjusting your criteria or browse our available categories."
+		} else {
+			response.Message = "Saya tidak dapat menemukan item yang sesuai dengan pencarian Anda. Coba sesuaikan kriteria atau jelajahi kategori yang tersedia."
+		}
+
+		response.QuickReplies = []QuickReply{
+			{Text: "Lihat semua kategori", Payload: "view_categories", Icon: "📂"},
+			{Text: "Pakaian formal", Payload: "search_formal", Icon: "👔"},
+			{Text: "Pakaian kasual", Payload: "search_casual", Icon: "👕"},
+			{Text: "Aksesoris", Payload: "search_accessories", Icon: "👜"},
+		}
+	} else {
+		if language == "en" {
+			response.Message = fmt.Sprintf("I found %d items matching your search:", len(items))
+		} else {
+			response.Message = fmt.Sprintf("Saya menemukan %d item yang sesuai dengan pencarian Anda:", len(items))
+		}
+
+		response.MessageType = "item_cards"
+		response.ItemCards = items
+
+		if len(items) >= 5 {
+			response.QuickReplies = []QuickReply{
+				{Text: "Lihat lebih banyak", Payload: "view_more_items", Icon: "➕"},
+				{Text: "Filter hasil", Payload: "filter_results", Icon: "🔍"},
+			}
+		}
+	}
+
+	return response, nil
+}
+
+// generateEducationResponse generates response for education-related queries (fallback)
+func (s *ChatService) generateEducationResponse(_ context.Context, response *ChatResponse, message string, _ *Intent, _ *ChatContext, language string) (*ChatResponse, error) {
+	// Search knowledge base for education content
+	kb := SearchKnowledgeBase(message, "education")
+
+	if len(kb) > 0 {
+		response.Message = kb[0].Answer
+
+		// Add related topics as quick replies
+		response.QuickReplies = []QuickReply{
+			{Text: "Perawatan katun", Payload: "fabric_care_cotton", Icon: "🧵"},
+			{Text: "Perawatan sutra", Payload: "fabric_care_silk", Icon: "✨"},
+			{Text: "Menghilangkan noda", Payload: "stain_removal", Icon: "🧽"},
+			{Text: "Fast fashion", Payload: "fast_fashion_impact", Icon: "🌍"},
+			{Text: "Tips outfit", Payload: "outfit_combinations", Icon: "👗"},
+		}
+
+		// Add related FAQs if available
+		if len(kb[0].RelatedFAQs) > 0 {
+			response.Suggestions = kb[0].RelatedFAQs
+		}
+	} else {
+		if language == "en" {
+			response.Message = "I can help you learn about clothing care, sustainable fashion, and styling tips. What would you like to know more about?"
+		} else {
+			response.Message = "Saya dapat membantu Anda belajar tentang perawatan pakaian, fashion berkelanjutan, dan tips styling. Apa yang ingin Anda ketahui lebih lanjut?"
+		}
+
+		response.QuickReplies = []QuickReply{
+			{Text: "Perawatan pakaian", Payload: "clothing_care", Icon: "🧺"},
+			{Text: "Fashion berkelanjutan", Payload: "sustainable_fashion", Icon: "♻️"},
+			{Text: "Tips styling", Payload: "styling_tips", Icon: "💄"},
+			{Text: "Organisasi lemari", Payload: "wardrobe_organization", Icon: "🗂️"},
+		}
+	}
+
+	return response, nil
+}
+
+// generateHelpResponse generates response for help-related queries (fallback)
+func (s *ChatService) generateHelpResponse(_ context.Context, response *ChatResponse, _ *Intent, _ *ChatContext, language string) (*ChatResponse, error) {
+	if language == "en" {
+		response.Message = "I'm here to help! I can assist you with:\n\n• Clothing donations and rentals\n• Item search and recommendations\n• Clothing care and maintenance tips\n• Sustainable fashion education\n• Platform features and account management\n\nWhat would you like to know more about?"
+	} else {
+		response.Message = "Saya di sini untuk membantu! Saya dapat membantu Anda dengan:\n\n• Donasi dan sewa pakaian\n• Pencarian dan rekomendasi item\n• Tips perawatan pakaian\n• Edukasi fashion berkelanjutan\n• Fitur platform dan manajemen akun\n\nApa yang ingin Anda ketahui lebih lanjut?"
+	}
+
+	response.QuickReplies = []QuickReply{
+		{Text: "Donasi pakaian", Payload: "donation_help", Icon: "💝"},
+		{Text: "Sewa pakaian", Payload: "rental_help", Icon: "👗"},
+		{Text: "Cari pakaian", Payload: "search_help", Icon: "🔍"},
+		{Text: "Tips perawatan", Payload: "care_tips", Icon: "🧺"},
+		{Text: "Akun saya", Payload: "account_help", Icon: "👤"},
+	}
+
+	return response, nil
+}
+
+// generateDefaultResponse generates default fallback response
+func (s *ChatService) generateDefaultResponse(_ context.Context, response *ChatResponse, language string) (*ChatResponse, error) {
+	if language == "en" {
+		response.Message = "I'm not sure I understand. Could you please rephrase your question? I can help with clothing donations, rentals, care tips, and more."
+	} else {
+		response.Message = "Saya tidak yakin saya mengerti. Bisakah Anda mengulang pertanyaan Anda? Saya dapat membantu dengan donasi pakaian, sewa, tips perawatan, dan lainnya."
+	}
+
+	response.QuickReplies = []QuickReply{
+		{Text: "Bantuan umum", Payload: "general_help", Icon: "❓"},
+		{Text: "Donasi", Payload: "donation_help", Icon: "💝"},
+		{Text: "Sewa", Payload: "rental_help", Icon: "👗"},
+		{Text: "Edukasi", Payload: "education_help", Icon: "📚"},
+	}
+
+	return response, nil
+}
+
+// generateFallbackResponse generates fallback response for errors
+func (s *ChatService) generateFallbackResponse(sessionID string) *ChatResponse {
+	return &ChatResponse{
+		SessionID:     sessionID,
+		Message:       "Maaf, terjadi kesalahan saat memproses pesan Anda. Silakan coba lagi.",
+		MessageType:   "text",
+		Timestamp:     time.Now(),
+		CanContinue:   true,
+		SessionActive: true,
+	}
 }
