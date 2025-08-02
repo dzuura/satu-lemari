@@ -375,6 +375,14 @@ func (s *ItemService) UpdateItem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Invalidate cache after successful update
+	if s.cacheHelper != nil {
+		ctx := context.Background()
+		if err := s.cacheHelper.InvalidateRelatedCaches(ctx, itemID.String(), existing.PartnerID); err != nil {
+			log.Printf("Failed to invalidate cache after item update: %v", err)
+		}
+	}
+
 	common.WriteSuccessResponse(w, updatedItem, "Item updated successfully")
 }
 
@@ -427,6 +435,14 @@ func (s *ItemService) UpdateItemStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Invalidate cache after successful status update
+	if s.cacheHelper != nil {
+		ctx := context.Background()
+		if err := s.cacheHelper.InvalidateRelatedCaches(ctx, itemID.String(), existing.PartnerID); err != nil {
+			log.Printf("Failed to invalidate cache after item status update: %v", err)
+		}
+	}
+
 	common.WriteSuccessResponse(w, updatedItem, "Item status updated successfully")
 }
 
@@ -477,6 +493,14 @@ func (s *ItemService) DeleteItem(w http.ResponseWriter, r *http.Request) {
 	if appErr != nil {
 		appError.WriteErrorResponse(w, appErr, common.GenerateTraceID())
 		return
+	}
+
+	// Invalidate cache after successful deletion
+	if s.cacheHelper != nil {
+		ctx := context.Background()
+		if err := s.cacheHelper.InvalidateRelatedCaches(ctx, itemID.String(), existing.PartnerID); err != nil {
+			log.Printf("Failed to invalidate cache after item deletion: %v", err)
+		}
 	}
 
 	common.WriteSuccessResponse(w, nil, "Item deleted successfully")

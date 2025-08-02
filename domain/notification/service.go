@@ -416,6 +416,102 @@ func (n *NotificationService) DeleteNotification(ctx context.Context, userID str
 	return nil
 }
 
+// DeleteNotificationsByRequestID deletes all notifications related to a specific request
+func (n *NotificationService) DeleteNotificationsByRequestID(ctx context.Context, requestID uuid.UUID) error {
+	log.Printf("Deleting all notifications related to request %s", requestID.String())
+
+	if n.fcm == nil || n.fcm.db == nil {
+		log.Printf("Database not available for deleting notifications by request ID")
+		return fmt.Errorf("database not available")
+	}
+
+	// Query notifications that have the request_id in their data field
+	// We need to use JSONB query to find notifications where data->>'request_id' = requestID
+	queryFilters := map[string]string{
+		"data->>'request_id'": "eq." + requestID.String(),
+	}
+
+	log.Printf("Querying notifications with request_id: %s", requestID.String())
+
+	// First, get all notifications to delete (for logging purposes)
+	rows, err := n.fcm.db.QueryTable(ctx, "notifications", queryFilters)
+	if err != nil {
+		log.Printf("Failed to query notifications by request_id: %v", err)
+		return fmt.Errorf("failed to query notifications by request_id: %v", err)
+	}
+
+	var notifications []map[string]interface{}
+	if err := rows.Scan(&notifications); err != nil {
+		log.Printf("Failed to scan notifications: %v", err)
+		return fmt.Errorf("failed to scan notifications: %v", err)
+	}
+
+	log.Printf("Found %d notifications to delete for request %s", len(notifications), requestID.String())
+
+	if len(notifications) == 0 {
+		log.Printf("No notifications found for request %s", requestID.String())
+		return nil
+	}
+
+	// Delete notifications using the same filter
+	err = n.fcm.db.Delete(ctx, "notifications", queryFilters)
+	if err != nil {
+		log.Printf("Failed to delete notifications by request_id: %v", err)
+		return fmt.Errorf("failed to delete notifications by request_id: %v", err)
+	}
+
+	log.Printf("Successfully deleted %d notifications for request %s", len(notifications), requestID.String())
+	return nil
+}
+
+// DeleteNotificationsByRequestIDAndUser deletes notifications related to a specific request for a specific user
+func (n *NotificationService) DeleteNotificationsByRequestIDAndUser(ctx context.Context, requestID uuid.UUID, userID string) error {
+	log.Printf("Deleting notifications related to request %s for user %s", requestID.String(), userID)
+
+	if n.fcm == nil || n.fcm.db == nil {
+		log.Printf("Database not available for deleting notifications by request ID and user")
+		return fmt.Errorf("database not available")
+	}
+
+	// Query notifications that have the request_id in their data field AND belong to the specific user
+	queryFilters := map[string]string{
+		"data->>'request_id'": "eq." + requestID.String(),
+		"user_id":             "eq." + userID,
+	}
+
+	log.Printf("Querying notifications with request_id: %s and user_id: %s", requestID.String(), userID)
+
+	// First, get all notifications to delete (for logging purposes)
+	rows, err := n.fcm.db.QueryTable(ctx, "notifications", queryFilters)
+	if err != nil {
+		log.Printf("Failed to query notifications by request_id and user_id: %v", err)
+		return fmt.Errorf("failed to query notifications by request_id and user_id: %v", err)
+	}
+
+	var notifications []map[string]interface{}
+	if err := rows.Scan(&notifications); err != nil {
+		log.Printf("Failed to scan notifications: %v", err)
+		return fmt.Errorf("failed to scan notifications: %v", err)
+	}
+
+	log.Printf("Found %d notifications to delete for request %s and user %s", len(notifications), requestID.String(), userID)
+
+	if len(notifications) == 0 {
+		log.Printf("No notifications found for request %s and user %s", requestID.String(), userID)
+		return nil
+	}
+
+	// Delete notifications using the same filter
+	err = n.fcm.db.Delete(ctx, "notifications", queryFilters)
+	if err != nil {
+		log.Printf("Failed to delete notifications by request_id and user_id: %v", err)
+		return fmt.Errorf("failed to delete notifications by request_id and user_id: %v", err)
+	}
+
+	log.Printf("Successfully deleted %d notifications for request %s and user %s", len(notifications), requestID.String(), userID)
+	return nil
+}
+
 // GetNotificationTemplates returns predefined notification templates
 func (n *NotificationService) GetNotificationTemplates() map[string]*NotificationTemplate {
 	return GetAllTemplates()

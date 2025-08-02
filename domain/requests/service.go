@@ -20,10 +20,12 @@ import (
 	"github.com/dzuura/satu-lemari/domain/queue"
 )
 
-// NotificationSender interface untuk menghindari circular import
+// NotificationSender interface to avoid circular import
 type NotificationSender interface {
 	SendRequestNotification(ctx context.Context, userID uuid.UUID, requestType, status, itemName string, requestID uuid.UUID) error
 	SendRequestNotificationWithFirebaseUID(ctx context.Context, firebaseUID, requestType, status, itemName string, requestID uuid.UUID) error
+	DeleteNotificationsByRequestID(ctx context.Context, requestID uuid.UUID) error
+	DeleteNotificationsByRequestIDAndUser(ctx context.Context, requestID uuid.UUID, userID string) error
 }
 
 // RequestService handles donation and rental requests
@@ -531,9 +533,9 @@ func (s *RequestService) UpdateRequest(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Update stok jika status berubah
+	// Update stock if request is approved from pending
 	if existingRequest.Status == "approved" && oldStatus == "pending" {
-		// Kurangi stok item untuk semua jenis request (donation & rental)
+		// Decrease stock for all request types (donation & rental)
 		log.Printf("Request approved: decreasing stock for %s request (item: %s, quantity: %d)",
 			existingRequest.Type, existingRequest.ItemID.String(), existingRequest.Quantity)
 		err := s.updateItemStock(existingRequest.ItemID, -existingRequest.Quantity)
@@ -543,10 +545,11 @@ func (s *RequestService) UpdateRequest(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Stock hanya bertambah untuk RENTAL yang completed/returned, TIDAK untuk donation
+	// Stock only increases for RENTAL that is completed/returned, NOT for donation
 	if (existingRequest.Status == "completed" || existingRequest.Status == "returned") && (oldStatus == "approved") {
-		if existingRequest.Type == "rental" {
-			// Tambah stok item hanya untuk rental (item dikembalikan)
+		switch existingRequest.Type {
+		case "rental":
+			// Increase stock only for rental (item is returned)
 			log.Printf("Rental completed/returned: increasing stock for rental request (item: %s, quantity: %d)",
 				existingRequest.ItemID.String(), existingRequest.Quantity)
 			err := s.updateItemStock(existingRequest.ItemID, existingRequest.Quantity)
@@ -554,8 +557,8 @@ func (s *RequestService) UpdateRequest(w http.ResponseWriter, r *http.Request) {
 				appError.WriteErrorResponse(w, appError.New(appError.ErrDatabase, "Failed to update item stock (increment)"), common.GenerateTraceID())
 				return
 			}
-		} else if existingRequest.Type == "donation" {
-			// Untuk donation completed: stock TIDAK bertambah (item sudah diberikan permanen)
+		case "donation":
+			// For donation completed: stock does not increase (item is given permanently)
 			log.Printf("Donation completed: stock remains decreased for donation request (item: %s, quantity: %d)",
 				existingRequest.ItemID.String(), existingRequest.Quantity)
 		}
@@ -684,28 +687,42 @@ func (s *RequestService) DeleteRequest(w http.ResponseWriter, r *http.Request) {
 
 	// Check if request can be deleted based on who is deleting and implement soft delete logic
 	var deleteType string
-	if deletedBy == "user" {
-		// User can delete request with any status
-		if existingRequest.Status == "pending" {
+	switch deletedBy {
+	case "user":
+		// User can delete requests with specific statuses
+		switch existingRequest.Status {
+		case "pending":
 			// Pending requests: hard delete (removes from both user and partner view)
 			deleteType = "hard_delete"
 			log.Printf("DeleteRequest: User deleting pending request - will be hard deleted (removed from both views)")
-		} else {
+		case "approved", "rejected", "completed", "cancelled":
 			// Non-pending requests: soft delete (only hide from user view)
 			deleteType = "soft_delete_user"
 			log.Printf("DeleteRequest: User deleting %s request - will be soft deleted (hidden from user only)", existingRequest.Status)
-		}
-	} else if deletedBy == "partner" {
-		// Partner can only delete completed requests
-		if existingRequest.Status != "completed" {
+		default:
 			appError.WriteErrorResponse(w,
-				appError.New(appError.ErrInvalidOperation, "Partners can only delete completed requests"),
+				appError.New(appError.ErrInvalidOperation, fmt.Sprintf("Cannot delete request with status: %s", existingRequest.Status)),
 				common.GenerateTraceID())
 			return
 		}
-		// Completed requests: soft delete (only hide from partner view)
-		deleteType = "soft_delete_partner"
-		log.Printf("DeleteRequest: Partner deleting completed request - will be soft deleted (hidden from partner only)")
+	case "partner":
+		// Partner can delete requests with specific statuses
+		switch existingRequest.Status {
+		case "approved", "rejected", "completed", "cancelled":
+			// Non-pending requests: soft delete (only hide from partner view)
+			deleteType = "soft_delete_partner"
+			log.Printf("DeleteRequest: Partner deleting %s request - will be soft deleted (hidden from partner only)", existingRequest.Status)
+		case "pending":
+			appError.WriteErrorResponse(w,
+				appError.New(appError.ErrInvalidOperation, "Partners cannot delete pending requests"),
+				common.GenerateTraceID())
+			return
+		default:
+			appError.WriteErrorResponse(w,
+				appError.New(appError.ErrInvalidOperation, fmt.Sprintf("Partners cannot delete request with status: %s", existingRequest.Status)),
+				common.GenerateTraceID())
+			return
+		}
 	}
 
 	log.Printf("DeleteRequest: %s (ID: %s) is deleting request %s for item %s (delete_type: %s)",
@@ -715,6 +732,31 @@ func (s *RequestService) DeleteRequest(w http.ResponseWriter, r *http.Request) {
 	if appErr := s.deleteRequestWithType(requestID, deleteType); appErr != nil {
 		appError.WriteErrorResponse(w, appErr, common.GenerateTraceID())
 		return
+	}
+
+	// Delete related notifications after successful request deletion
+	if s.notificationSender != nil {
+		go func() {
+			ctx := context.Background()
+
+			// For hard delete: remove all notifications for all users
+			// For soft delete: only remove notifications for the user who deleted the request
+			if deleteType == "hard_delete" {
+				// Hard delete: remove all notifications related to this request
+				if err := s.notificationSender.DeleteNotificationsByRequestID(ctx, requestID); err != nil {
+					log.Printf("Failed to delete all notifications for request %s: %v", requestID.String(), err)
+				} else {
+					log.Printf("Successfully deleted all notifications for request %s (hard delete)", requestID.String())
+				}
+			} else {
+				// Soft delete: only remove notifications for the specific user who deleted the request
+				if err := s.notificationSender.DeleteNotificationsByRequestIDAndUser(ctx, requestID, userID); err != nil {
+					log.Printf("Failed to delete notifications for request %s and user %s: %v", requestID.String(), userID, err)
+				} else {
+					log.Printf("Successfully deleted notifications for request %s and user %s (soft delete)", requestID.String(), userID)
+				}
+			}
+		}()
 	}
 
 	// Return the deleted request data for confirmation
@@ -1064,7 +1106,7 @@ func (s *RequestService) updateRequest(request *models.Request) *appError.AppErr
 
 	// Prepare update data
 	updateData := map[string]interface{}{
-		"status":           request.Status, // pastikan status selalu dikirim
+		"status":           request.Status, // ensure status is always sent
 		"rejection_reason": request.RejectionReason,
 		"pickup_date":      request.PickupDate,
 		"return_date":      request.ReturnDate,
@@ -1200,11 +1242,6 @@ func (s *RequestService) softDeleteRequest(requestID uuid.UUID, deletedByUser, d
 	log.Printf("Request soft deleted successfully: %s (user: %v, partner: %v)",
 		requestID.String(), deletedByUser, deletedByPartner)
 	return nil
-}
-
-// deleteRequest - legacy method for backward compatibility
-func (s *RequestService) deleteRequest(requestID uuid.UUID) *appError.AppError {
-	return s.hardDeleteRequest(requestID)
 }
 
 // getExistingRequest checks if user already has a request for the item

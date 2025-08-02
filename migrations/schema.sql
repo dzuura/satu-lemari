@@ -23,7 +23,7 @@ CREATE TABLE IF NOT EXISTS users (
     is_active BOOLEAN DEFAULT true,
     weekly_donation_quota INTEGER DEFAULT 3,
     weekly_donation_used INTEGER DEFAULT 0,
-    quota_reset_date DATE DEFAULT CURRENT_DATE,
+    quota_reset_date DATE,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
@@ -184,37 +184,25 @@ CREATE TABLE IF NOT EXISTS search_queries (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
--- Create indexes for better performance
-CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
-CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
-CREATE INDEX IF NOT EXISTS idx_users_role ON users(role);
-CREATE INDEX IF NOT EXISTS idx_items_partner_id ON items(partner_id);
-CREATE INDEX IF NOT EXISTS idx_items_category_id ON items(category_id);
-CREATE INDEX IF NOT EXISTS idx_items_type ON items(type);
-CREATE INDEX IF NOT EXISTS idx_items_status ON items(status);
-CREATE INDEX IF NOT EXISTS idx_requests_user_id ON requests(user_id);
-CREATE INDEX IF NOT EXISTS idx_requests_partner_id ON requests(partner_id);
-CREATE INDEX IF NOT EXISTS idx_requests_item_id ON requests(item_id);
-CREATE INDEX IF NOT EXISTS idx_requests_status ON requests(status);
-CREATE INDEX IF NOT EXISTS idx_requests_type ON requests(type);
-CREATE INDEX IF NOT EXISTS idx_requests_deleted_by_user ON requests(deleted_by_user);
-CREATE INDEX IF NOT EXISTS idx_requests_deleted_by_partner ON requests(deleted_by_partner);
-CREATE INDEX IF NOT EXISTS idx_requests_user_not_deleted ON requests(user_id, deleted_by_user);
-CREATE INDEX IF NOT EXISTS idx_requests_partner_not_deleted ON requests(partner_id, deleted_by_partner);
-CREATE INDEX IF NOT EXISTS idx_transactions_user_id ON transactions(user_id);
-CREATE INDEX IF NOT EXISTS idx_transactions_partner_id ON transactions(partner_id);
-CREATE INDEX IF NOT EXISTS idx_notifications_user_id ON notifications(user_id);
-CREATE INDEX IF NOT EXISTS idx_notifications_is_read ON notifications(is_read);
--- FCM Tokens indexes
-CREATE INDEX IF NOT EXISTS idx_fcm_tokens_user_id ON fcm_tokens(user_id);
-CREATE INDEX IF NOT EXISTS idx_fcm_tokens_token ON fcm_tokens(token);  -- Non-unique: multiple users can share same token
-CREATE INDEX IF NOT EXISTS idx_fcm_tokens_is_active ON fcm_tokens(is_active);
-CREATE INDEX IF NOT EXISTS idx_fcm_tokens_platform ON fcm_tokens(platform);
-CREATE INDEX IF NOT EXISTS idx_fcm_tokens_last_used ON fcm_tokens(last_used_at DESC);
-CREATE INDEX IF NOT EXISTS idx_fcm_tokens_user_platform ON fcm_tokens(user_id, platform);  -- For unique constraint
-CREATE INDEX IF NOT EXISTS idx_cache_expires_at ON cache(expires_at);
-CREATE INDEX IF NOT EXISTS idx_queue_jobs_status ON queue_jobs(status);
-CREATE INDEX IF NOT EXISTS idx_queue_jobs_scheduled_at ON queue_jobs(scheduled_at);
+-- Chat sessions table
+CREATE TABLE IF NOT EXISTS chat_sessions (
+    id VARCHAR(36) PRIMARY KEY, -- UUID as string
+    user_id VARCHAR(128) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    last_activity TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    context JSONB DEFAULT '{}',
+    is_active BOOLEAN DEFAULT true
+);
+
+-- Chat messages table
+CREATE TABLE IF NOT EXISTS chat_messages (
+    id VARCHAR(36) PRIMARY KEY, -- UUID as string
+    session_id VARCHAR(36) NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
+    role VARCHAR(20) NOT NULL CHECK (role IN ('user', 'assistant')),
+    content TEXT NOT NULL,
+    timestamp TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    metadata JSONB DEFAULT '{}'
+);
 
 -- Insert default categories
 INSERT INTO categories (name, description, icon) VALUES
@@ -226,6 +214,52 @@ INSERT INTO categories (name, description, icon) VALUES
 ('Pakaian Luar', 'Jaket, mantel, dan pakaian luar', 'pakaian luar'),
 ('Alas Kaki', 'Sepatu dan sandal', 'alas kaki'),
 ('Celana', 'Aneka celana', 'celana');
+
+-- Create indexes for better performance
+-- Users indexes
+CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
+CREATE INDEX IF NOT EXISTS idx_users_role ON users(role);
+-- Items indexes
+CREATE INDEX IF NOT EXISTS idx_items_partner_id ON items(partner_id);
+CREATE INDEX IF NOT EXISTS idx_items_category_id ON items(category_id);
+CREATE INDEX IF NOT EXISTS idx_items_type ON items(type);
+CREATE INDEX IF NOT EXISTS idx_items_status ON items(status);
+-- Requests indexes
+CREATE INDEX IF NOT EXISTS idx_requests_user_id ON requests(user_id);
+CREATE INDEX IF NOT EXISTS idx_requests_partner_id ON requests(partner_id);
+CREATE INDEX IF NOT EXISTS idx_requests_item_id ON requests(item_id);
+CREATE INDEX IF NOT EXISTS idx_requests_status ON requests(status);
+CREATE INDEX IF NOT EXISTS idx_requests_type ON requests(type);
+CREATE INDEX IF NOT EXISTS idx_requests_deleted_by_user ON requests(deleted_by_user);
+CREATE INDEX IF NOT EXISTS idx_requests_deleted_by_partner ON requests(deleted_by_partner);
+CREATE INDEX IF NOT EXISTS idx_requests_user_not_deleted ON requests(user_id, deleted_by_user);
+CREATE INDEX IF NOT EXISTS idx_requests_partner_not_deleted ON requests(partner_id, deleted_by_partner);
+-- Transactions indexes
+CREATE INDEX IF NOT EXISTS idx_transactions_user_id ON transactions(user_id);
+CREATE INDEX IF NOT EXISTS idx_transactions_partner_id ON transactions(partner_id);
+-- Notifications indexes
+CREATE INDEX IF NOT EXISTS idx_notifications_user_id ON notifications(user_id);
+CREATE INDEX IF NOT EXISTS idx_notifications_is_read ON notifications(is_read);
+-- FCM Tokens indexes
+CREATE INDEX IF NOT EXISTS idx_fcm_tokens_user_id ON fcm_tokens(user_id);
+CREATE INDEX IF NOT EXISTS idx_fcm_tokens_token ON fcm_tokens(token);  -- Non-unique: multiple users can share same token
+CREATE INDEX IF NOT EXISTS idx_fcm_tokens_is_active ON fcm_tokens(is_active);
+CREATE INDEX IF NOT EXISTS idx_fcm_tokens_platform ON fcm_tokens(platform);
+CREATE INDEX IF NOT EXISTS idx_fcm_tokens_last_used ON fcm_tokens(last_used_at DESC);
+CREATE INDEX IF NOT EXISTS idx_fcm_tokens_user_platform ON fcm_tokens(user_id, platform);  -- For unique constraint
+-- Cache indexes
+CREATE INDEX IF NOT EXISTS idx_cache_expires_at ON cache(expires_at);
+-- Queue jobs indexes
+CREATE INDEX IF NOT EXISTS idx_queue_jobs_status ON queue_jobs(status);
+CREATE INDEX IF NOT EXISTS idx_queue_jobs_scheduled_at ON queue_jobs(scheduled_at);
+-- Chat tables indexes
+CREATE INDEX IF NOT EXISTS idx_chat_sessions_user_id ON chat_sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_chat_sessions_last_activity ON chat_sessions(last_activity);
+CREATE INDEX IF NOT EXISTS idx_chat_sessions_is_active ON chat_sessions(is_active);
+CREATE INDEX IF NOT EXISTS idx_chat_messages_session_id ON chat_messages(session_id);
+CREATE INDEX IF NOT EXISTS idx_chat_messages_timestamp ON chat_messages(timestamp);
+CREATE INDEX IF NOT EXISTS idx_chat_messages_role ON chat_messages(role);
 
 -- Functions for automatic updates
 CREATE OR REPLACE FUNCTION update_updated_at_column()
@@ -273,6 +307,38 @@ CREATE TRIGGER trigger_update_item_availability
     AFTER UPDATE OF available_quantity ON items 
     FOR EACH ROW EXECUTE FUNCTION update_item_availability();
 
+-- Function to automatically update updated_at timestamp for FCM tokens
+CREATE OR REPLACE FUNCTION update_fcm_tokens_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = NOW();
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Trigger to automatically update updated_at for FCM tokens
+CREATE TRIGGER trigger_fcm_tokens_updated_at
+    BEFORE UPDATE ON fcm_tokens
+    FOR EACH ROW
+    EXECUTE FUNCTION update_fcm_tokens_updated_at();
+
+-- Function to clean up inactive FCM tokens (for maintenance)
+-- Note: Multiple users can have the same token (shared device scenario)
+-- This function only removes inactive tokens that haven't been used for specified days
+CREATE OR REPLACE FUNCTION cleanup_inactive_fcm_tokens(days_inactive INTEGER DEFAULT 30)
+RETURNS INTEGER AS $$
+DECLARE
+    deleted_count INTEGER;
+BEGIN
+    DELETE FROM fcm_tokens
+    WHERE is_active = false
+    AND updated_at < NOW() - INTERVAL '1 day' * days_inactive;
+
+    GET DIAGNOSTICS deleted_count = ROW_COUNT;
+    RETURN deleted_count;
+END;
+$$ LANGUAGE plpgsql;
+
 -- Enable RLS on all tables
 ALTER TABLE users ENABLE ROW LEVEL SECURITY;
 ALTER TABLE items ENABLE ROW LEVEL SECURITY;
@@ -310,35 +376,3 @@ CREATE POLICY "Users can view own FCM tokens" ON fcm_tokens FOR SELECT USING (au
 CREATE POLICY "Users can insert own FCM tokens" ON fcm_tokens FOR INSERT WITH CHECK (auth.uid()::VARCHAR = user_id);
 CREATE POLICY "Users can update own FCM tokens" ON fcm_tokens FOR UPDATE USING (auth.uid()::VARCHAR = user_id);
 CREATE POLICY "Users can delete own FCM tokens" ON fcm_tokens FOR DELETE USING (auth.uid()::VARCHAR = user_id);
-
--- Function to automatically update updated_at timestamp for FCM tokens
-CREATE OR REPLACE FUNCTION update_fcm_tokens_updated_at()
-RETURNS TRIGGER AS $$
-BEGIN
-    NEW.updated_at = NOW();
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
--- Trigger to automatically update updated_at for FCM tokens
-CREATE TRIGGER trigger_fcm_tokens_updated_at
-    BEFORE UPDATE ON fcm_tokens
-    FOR EACH ROW
-    EXECUTE FUNCTION update_fcm_tokens_updated_at();
-
--- Function to clean up inactive FCM tokens (for maintenance)
--- Note: Multiple users can have the same token (shared device scenario)
--- This function only removes inactive tokens that haven't been used for specified days
-CREATE OR REPLACE FUNCTION cleanup_inactive_fcm_tokens(days_inactive INTEGER DEFAULT 30)
-RETURNS INTEGER AS $$
-DECLARE
-    deleted_count INTEGER;
-BEGIN
-    DELETE FROM fcm_tokens
-    WHERE is_active = false
-    AND updated_at < NOW() - INTERVAL '1 day' * days_inactive;
-
-    GET DIAGNOSTICS deleted_count = ROW_COUNT;
-    RETURN deleted_count;
-END;
-$$ LANGUAGE plpgsql;

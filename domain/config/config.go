@@ -113,7 +113,7 @@ func LoadConfig() *Config {
 		// AI Services (Gemini API)
 		EnableAIFeatures: getEnvAsBool("ENABLE_AI_FEATURES", true),
 		GeminiAPIKey:     getEnv("GEMINI_API_KEY", ""),
-		GeminiModel:      getEnv("GEMINI_MODEL", "gemini-1.5-flash"),
+		GeminiModel:      getEnv("GEMINI_MODEL", "gemini-2.0-flash"),
 
 		// Email Service
 		SMTPHost:     getEnv("SMTP_HOST", ""),

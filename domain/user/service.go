@@ -60,7 +60,7 @@ func (s *UserService) GetMyProfile(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("GetMyProfile called with userID: %s", userID)
 
-	user, err := s.getUserByID(userID)
+	user, err := s.GetUserByID(userID)
 	if err != nil {
 		log.Printf("Error getting user by ID: %v", err)
 		appError.WriteErrorResponse(w, err, common.GenerateTraceID())
@@ -253,7 +253,7 @@ func (s *UserService) GetUserProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, appErr := s.getUserByID(userID)
+	user, appErr := s.GetUserByID(userID)
 	if appErr != nil {
 		appError.WriteErrorResponse(w, appErr, common.GenerateTraceID())
 		return
@@ -282,7 +282,8 @@ func (s *UserService) SearchUsers(w http.ResponseWriter, r *http.Request) {
 
 // Helper methods
 
-func (s *UserService) getUserByID(userID string) (*models.User, *appError.AppError) {
+// GetUserByID retrieves a user by their ID
+func (s *UserService) GetUserByID(userID string) (*models.User, *appError.AppError) {
 	// Try to get from cache first
 	ctx := context.Background()
 	cacheKey := s.cache.GenerateKey(cache.KeyUserProfile, userID)
@@ -427,7 +428,7 @@ func (s *UserService) getUserStats(userID, role string) (*models.UserStats, *app
 		stats.CompletedRequests = stats.TotalDonations + stats.TotalRentals
 
 		// Get user info for weekly quota
-		user, err := s.getUserByID(userID)
+		user, err := s.GetUserByID(userID)
 		if err == nil {
 			stats.WeeklyQuotaUsed = user.WeeklyDonationUsed
 			stats.WeeklyQuotaRemaining = user.GetRemainingDonationQuota()
@@ -887,7 +888,7 @@ func (s *UserService) DeleteMyAccount(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get user info to determine role
-	user, appErr := s.getUserByID(userID)
+	user, appErr := s.GetUserByID(userID)
 	if appErr != nil {
 		appError.WriteErrorResponse(w, appErr, common.GenerateTraceID())
 		return
