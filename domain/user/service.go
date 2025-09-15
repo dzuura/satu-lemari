@@ -284,14 +284,15 @@ func (s *UserService) SearchUsers(w http.ResponseWriter, r *http.Request) {
 
 // GetUserByID retrieves a user by their ID
 func (s *UserService) GetUserByID(userID string) (*models.User, *appError.AppError) {
-	// Try to get from cache first
+	// Try to get from cache first (only if cache is configured)
 	ctx := context.Background()
-	cacheKey := s.cache.GenerateKey(cache.KeyUserProfile, userID)
-
-	var cachedUser models.User
-	if err := s.cache.Get(ctx, cacheKey, &cachedUser); err == nil {
-		log.Printf("User %s retrieved from cache", userID)
-		return &cachedUser, nil
+	if s.cache != nil {
+		cacheKey := s.cache.GenerateKey(cache.KeyUserProfile, userID)
+		var cachedUser models.User
+		if err := s.cache.Get(ctx, cacheKey, &cachedUser); err == nil {
+			log.Printf("User %s retrieved from cache", userID)
+			return &cachedUser, nil
+		}
 	}
 
 	client := &http.Client{Timeout: 10 * time.Second}
@@ -341,25 +342,29 @@ func (s *UserService) GetUserByID(userID string) (*models.User, *appError.AppErr
 
 	user := &users[0]
 
-	// Cache the user data for 15 minutes
-	if err := s.cache.Set(ctx, cacheKey, user, 15*time.Minute); err != nil {
-		log.Printf("Failed to cache user %s: %v", userID, err)
-	} else {
-		log.Printf("User %s cached successfully", userID)
+	// Cache the user data for 15 minutes (only if cache is configured)
+	if s.cache != nil {
+		cacheKey := s.cache.GenerateKey(cache.KeyUserProfile, userID)
+		if err := s.cache.Set(ctx, cacheKey, user, 15*time.Minute); err != nil {
+			log.Printf("Failed to cache user %s: %v", userID, err)
+		} else {
+			log.Printf("User %s cached successfully", userID)
+		}
 	}
 
 	return user, nil
 }
 
 func (s *UserService) getUserStats(userID, role string) (*models.UserStats, *appError.AppError) {
-	// Try to get from cache first
+	// Try to get from cache first (only if cache is configured)
 	ctx := context.Background()
-	cacheKey := s.cache.GenerateKey(cache.KeyUserStats, userID, role)
-
-	var cachedStats models.UserStats
-	if err := s.cache.Get(ctx, cacheKey, &cachedStats); err == nil {
-		log.Printf("User stats for %s retrieved from cache", userID)
-		return &cachedStats, nil
+	if s.cache != nil {
+		cacheKey := s.cache.GenerateKey(cache.KeyUserStats, userID, role)
+		var cachedStats models.UserStats
+		if err := s.cache.Get(ctx, cacheKey, &cachedStats); err == nil {
+			log.Printf("User stats for %s retrieved from cache", userID)
+			return &cachedStats, nil
+		}
 	}
 
 	client := &http.Client{Timeout: 10 * time.Second}
@@ -393,8 +398,14 @@ func (s *UserService) getUserStats(userID, role string) (*models.UserStats, *app
 			stats.TotalRentals = count
 		}
 
-		// Completed requests = Total donations + Total rentals
-		stats.CompletedRequests = stats.TotalDonations + stats.TotalRentals
+		// Total thrifting completed (type=thrifting, status=completed)
+		thriftingURL := fmt.Sprintf("%s/rest/v1/requests?partner_id=eq.%s&type=eq.thrifting&status=eq.completed&select=count", s.config.SupabaseURL, userID)
+		if count, err := s.getCount(client, thriftingURL); err == nil {
+			stats.TotalThrifting = count
+		}
+
+		// Completed requests = Total donations + Total rentals + thrifting
+		stats.CompletedRequests = stats.TotalDonations + stats.TotalRentals + stats.TotalThrifting
 
 		// Weekly quota fields are always 0 for partners
 		stats.WeeklyQuotaUsed = 0
@@ -424,8 +435,14 @@ func (s *UserService) getUserStats(userID, role string) (*models.UserStats, *app
 			stats.TotalRentals = count
 		}
 
-		// Completed requests = Total donations + Total rentals
-		stats.CompletedRequests = stats.TotalDonations + stats.TotalRentals
+		// Total thrifting received (type=thrifting, status=completed)
+		thriftingURL := fmt.Sprintf("%s/rest/v1/requests?user_id=eq.%s&type=eq.thrifting&status=eq.completed&select=count", s.config.SupabaseURL, userID)
+		if count, err := s.getCount(client, thriftingURL); err == nil {
+			stats.TotalThrifting = count
+		}
+
+		// Completed requests = Total donations + Total rentals + thrifting
+		stats.CompletedRequests = stats.TotalDonations + stats.TotalRentals + stats.TotalThrifting
 
 		// Get user info for weekly quota
 		user, err := s.GetUserByID(userID)
@@ -435,11 +452,14 @@ func (s *UserService) getUserStats(userID, role string) (*models.UserStats, *app
 		}
 	}
 
-	// Cache the stats for 5 minutes (stats change frequently)
-	if err := s.cache.Set(ctx, cacheKey, stats, 5*time.Minute); err != nil {
-		log.Printf("Failed to cache user stats for %s: %v", userID, err)
-	} else {
-		log.Printf("User stats for %s cached successfully", userID)
+	// Cache the stats for 5 minutes (stats change frequently) only if cache is configured
+	if s.cache != nil {
+		cacheKey := s.cache.GenerateKey(cache.KeyUserStats, userID, role)
+		if err := s.cache.Set(ctx, cacheKey, stats, 5*time.Minute); err != nil {
+			log.Printf("Failed to cache user stats for %s: %v", userID, err)
+		} else {
+			log.Printf("User stats for %s cached successfully", userID)
+		}
 	}
 
 	return stats, nil

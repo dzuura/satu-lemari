@@ -48,7 +48,7 @@ CREATE TABLE IF NOT EXISTS items (
     description TEXT,
     size VARCHAR(10) NOT NULL,
     color VARCHAR(50),
-    type VARCHAR(20) CHECK (type IN ('donation', 'rental')) NOT NULL,
+    type VARCHAR(20) CHECK (type IN ('donation', 'rental', 'thrifting')) NOT NULL,
     price DECIMAL(10, 2) DEFAULT 0, -- for rental items
     total_quantity INTEGER NOT NULL DEFAULT 1,
     available_quantity INTEGER NOT NULL DEFAULT 1,
@@ -65,7 +65,7 @@ CREATE TABLE IF NOT EXISTS requests (
     item_id UUID NOT NULL REFERENCES items(id) ON DELETE CASCADE,
     user_id VARCHAR(128) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     partner_id VARCHAR(128) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    type VARCHAR(20) CHECK (type IN ('donation', 'rental')) NOT NULL,
+    type VARCHAR(20) CHECK (type IN ('donation', 'rental', 'thrifting')) NOT NULL,
     quantity INTEGER NOT NULL DEFAULT 1,
     reason TEXT,
     contact_info VARCHAR(255),
@@ -88,7 +88,7 @@ CREATE TABLE IF NOT EXISTS transactions (
     item_id UUID NOT NULL REFERENCES items(id),
     user_id VARCHAR(128) NOT NULL REFERENCES users(id),
     partner_id VARCHAR(128) NOT NULL REFERENCES users(id),
-    type VARCHAR(20) CHECK (type IN ('donation', 'rental')) NOT NULL,
+    type VARCHAR(20) CHECK (type IN ('donation', 'rental', 'thrifting')) NOT NULL,
     quantity INTEGER NOT NULL,
     amount DECIMAL(10, 2) DEFAULT 0, -- for rental
     status VARCHAR(20) CHECK (status IN ('active', 'completed', 'cancelled')) DEFAULT 'active',

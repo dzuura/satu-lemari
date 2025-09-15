@@ -217,6 +217,8 @@ func formatRequestType(requestType string) string {
 		return "donasi"
 	case "rental":
 		return "sewa"
+	case "thrifting":
+		return "thrifting"
 	default:
 		return requestType // Return original if not recognized
 	}

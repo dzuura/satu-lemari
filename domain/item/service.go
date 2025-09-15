@@ -168,7 +168,18 @@ func (s *ItemService) CreateItem(w http.ResponseWriter, r *http.Request) {
 
 	// Upload images
 	var imageURLs []string
-	if uploadedFiles := common.GetFormFiles(files, "images"); len(uploadedFiles) > 0 {
+	uploadedFiles := common.GetFormFiles(files, "images")
+	if len(uploadedFiles) == 0 {
+		// Try common alternative keys used by clients
+		if alt := common.GetFormFiles(files, "images[]"); len(alt) > 0 {
+			uploadedFiles = alt
+		} else if alt := common.GetFormFiles(files, "file"); len(alt) > 0 {
+			uploadedFiles = alt
+		} else if alt := common.GetFormFiles(files, "files"); len(alt) > 0 {
+			uploadedFiles = alt
+		}
+	}
+	if len(uploadedFiles) > 0 {
 		uploadResults, uploadErr := s.storage.UploadMultipleFiles(uploadedFiles, "items", "images")
 		if uploadErr != nil {
 			appError.WriteErrorResponse(w, uploadErr, common.GenerateTraceID())
@@ -1204,11 +1215,11 @@ func (s *ItemService) validateCreateRequest(req *models.CreateItemRequest) *appE
 	if req.Type == "" {
 		return appError.New(appError.ErrMissingField, "Type is required")
 	}
-	if !common.Contains([]string{"donation", "rental"}, req.Type) {
-		return appError.New(appError.ErrInvalidInput, "Type must be either 'donation' or 'rental'")
+	if !common.Contains([]string{"donation", "rental", "thrifting"}, req.Type) {
+		return appError.New(appError.ErrInvalidInput, "Type must be one of: 'donation', 'rental', 'thrifting'")
 	}
-	if req.Type == "rental" && (req.Price == nil || *req.Price <= 0) {
-		return appError.New(appError.ErrInvalidInput, "Price is required for rental items")
+	if (req.Type == "rental" || req.Type == "thrifting") && (req.Price == nil || *req.Price <= 0) {
+		return appError.New(appError.ErrInvalidInput, "Price is required for rental/thrifting items")
 	}
 	if len(req.Images) == 0 {
 		return appError.New(appError.ErrMissingField, "At least one image is required")
@@ -1249,6 +1260,12 @@ func (s *ItemService) validateUpdateRequest(req *models.UpdateItemRequest) *appE
 	if req.Size != nil {
 		if len(*req.Size) == 0 {
 			return appError.New(appError.ErrInvalidInput, "Size cannot be empty")
+		}
+	}
+	// UpdateItemRequest does not have Type field; validasi price only ensures not negative
+	if req.Price != nil {
+		if *req.Price < 0 {
+			return appError.New(appError.ErrInvalidInput, "Price cannot be negative")
 		}
 	}
 	return nil

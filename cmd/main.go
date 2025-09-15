@@ -381,7 +381,7 @@ func (s *Server) welcome(w http.ResponseWriter, r *http.Request) {
 	response := map[string]interface{}{
 		"message":     "Welcome to SatuLemari API",
 		"version":     "1.0.0",
-		"description": "Donation and rental clothing platform API",
+		"description": "Donation, rental, and thrifting clothing platform API",
 		"docs":        "/docs",
 		"health":      "/health",
 		"endpoints": map[string]interface{}{

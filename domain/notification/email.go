@@ -127,7 +127,7 @@ func (e *EmailService) createEmailBody(notification *Notification) string {
 <body>
     <div class="header">
         <h1>SatuLemari</h1>
-        <p>Platform Donasi dan Rental Pakaian</p>
+        <p>Platform Donasi, Rental, dan Thrifting Pakaian</p>
     </div>
     
     <div class="content">
@@ -301,7 +301,7 @@ func (e *EmailService) createWelcomeEmailBody(username string) string {
 <body>
     <div class="header">
         <h1>🎉 Selamat Datang di SatuLemari!</h1>
-        <p>Platform Donasi dan Rental Pakaian Terpercaya</p>
+        <p>Platform Donasi, Rental, dan Thrifting Pakaian Terpercaya</p>
     </div>
     
     <div class="content">

@@ -74,6 +74,7 @@ type UserWithLocation struct {
 type UserStats struct {
 	TotalDonations       int `json:"total_donations"`
 	TotalRentals         int `json:"total_rentals"`
+	TotalThrifting       int `json:"total_thrifting"`
 	ActiveItems          int `json:"active_items"`
 	PendingRequests      int `json:"pending_requests"`
 	CompletedRequests    int `json:"completed_requests"`
