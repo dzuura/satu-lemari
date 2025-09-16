@@ -334,6 +334,8 @@ func (s *Server) registerRoutes(api *mux.Router) {
 	s.categoryService.RegisterAdminRoutes(adminRoutes)
 
 	// Admin orders routes
+	adminRoutes.HandleFunc("/orders", s.ordersService.ListOrders).Methods("GET")
+	adminRoutes.HandleFunc("/orders/{order_id}", s.ordersService.GetOrder).Methods("GET")
 	adminRoutes.HandleFunc("/orders/{order_id}/verify-payment", s.ordersService.VerifyPayment).Methods("POST")
 	adminRoutes.HandleFunc("/orders/expire", s.ordersService.ExpireOrders).Methods("POST")
 }

@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"net/url"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -276,6 +278,129 @@ func (s *OrdersService) calculateShippingFee(itemType, method string, distanceKm
 	return shippingFee
 }
 
+// ListOrders handles GET /orders (admin)
+func (s *OrdersService) ListOrders(w http.ResponseWriter, r *http.Request) {
+	// Build filters
+	q := url.Values{}
+	q.Set("select", "*")
+
+	status := r.URL.Query().Get("status")
+	orderType := r.URL.Query().Get("type")
+	buyerID := r.URL.Query().Get("buyer_id")
+	sellerID := r.URL.Query().Get("seller_id")
+	pageStr := r.URL.Query().Get("page")
+	limitStr := r.URL.Query().Get("limit")
+
+	if status != "" {
+		q.Set("status", "eq."+status)
+	}
+	if orderType != "" {
+		q.Set("type", "eq."+orderType)
+	}
+	if buyerID != "" {
+		q.Set("buyer_id", "eq."+buyerID)
+	}
+	if sellerID != "" {
+		q.Set("seller_id", "eq."+sellerID)
+	}
+
+	limit := 20
+	if v, err := strconv.Atoi(limitStr); err == nil && v > 0 {
+		limit = v
+	}
+	page := 1
+	if v, err := strconv.Atoi(pageStr); err == nil && v > 0 {
+		page = v
+	}
+	offset := (page - 1) * limit
+	q.Set("limit", strconv.Itoa(limit))
+	q.Set("offset", strconv.Itoa(offset))
+	q.Set("order", "created_at.desc")
+
+	listURL := fmt.Sprintf("%s/rest/v1/orders?%s", s.config.SupabaseURL, q.Encode())
+	orders, appErr := s.getMultiple(listURL)
+	if appErr != nil {
+		appError.WriteErrorResponse(w, appErr, common.GenerateTraceID())
+		return
+	}
+
+	// Total count
+	countURL := fmt.Sprintf("%s/rest/v1/orders?select=count", s.config.SupabaseURL)
+	if status != "" || orderType != "" || buyerID != "" || sellerID != "" {
+		// reapply filters for count
+		cq := url.Values{}
+		cq.Set("select", "count")
+		if status != "" {
+			cq.Set("status", "eq."+status)
+		}
+		if orderType != "" {
+			cq.Set("type", "eq."+orderType)
+		}
+		if buyerID != "" {
+			cq.Set("buyer_id", "eq."+buyerID)
+		}
+		if sellerID != "" {
+			cq.Set("seller_id", "eq."+sellerID)
+		}
+		countURL = fmt.Sprintf("%s/rest/v1/orders?%s", s.config.SupabaseURL, cq.Encode())
+	}
+	rows, err := http.NewRequest(http.MethodGet, countURL, nil)
+	if err != nil {
+		appError.WriteErrorResponse(w, appError.New(appError.ErrInternal, "Failed to build count request"), common.GenerateTraceID())
+		return
+	}
+	rows.Header.Set("apikey", s.config.SupabaseServiceRoleKey)
+	rows.Header.Set("Authorization", "Bearer "+s.config.SupabaseServiceRoleKey)
+	resp, err := http.DefaultClient.Do(rows)
+	if err != nil {
+		appError.WriteErrorResponse(w, appError.New(appError.ErrDatabase, "Count request failed"), common.GenerateTraceID())
+		return
+	}
+	defer resp.Body.Close()
+	var countArr []map[string]interface{}
+	_ = json.NewDecoder(resp.Body).Decode(&countArr)
+	total := len(orders)
+	if len(countArr) > 0 {
+		if c, ok := countArr[0]["count"].(float64); ok {
+			total = int(c)
+		}
+	}
+
+	meta := common.CalculateMeta(page, limit, total)
+	common.WriteSuccessResponseWithMeta(w, orders, meta, "Orders retrieved successfully")
+}
+
+// GetOrder handles GET /orders/{order_id} (admin)
+func (s *OrdersService) GetOrder(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	orderID := vars["order_id"]
+	if orderID == "" {
+		appError.WriteErrorResponse(w, appError.New(appError.ErrInvalidInput, "Invalid order ID"), common.GenerateTraceID())
+		return
+	}
+	orderURL := fmt.Sprintf("%s/rest/v1/orders?id=eq.%s&select=*", s.config.SupabaseURL, orderID)
+	ord, appErr := s.getSingle(orderURL)
+	if appErr != nil {
+		appError.WriteErrorResponse(w, appErr, common.GenerateTraceID())
+		return
+	}
+	paymentURL := fmt.Sprintf("%s/rest/v1/payments?order_id=eq.%s&select=*&order=created_at.desc", s.config.SupabaseURL, orderID)
+	pmts, appErr := s.getMultiple(paymentURL)
+	if appErr != nil {
+		// still return order without payment
+		common.WriteSuccessResponse(w, map[string]interface{}{"order": ord}, "Order retrieved successfully")
+		return
+	}
+	resp := map[string]interface{}{
+		"order":   ord,
+		"payment": nil,
+	}
+	if len(pmts) > 0 {
+		resp["payment"] = pmts[0]
+	}
+	common.WriteSuccessResponse(w, resp, "Order retrieved successfully")
+}
+
 // getSingle queries Supabase REST and returns the first object as map
 func (s *OrdersService) getSingle(url string) (map[string]interface{}, *appError.AppError) {
 	req, err := http.NewRequest("GET", url, nil)
@@ -322,46 +447,6 @@ func (s *OrdersService) getMultiple(url string) ([]map[string]interface{}, *appE
 		return nil, appError.New(appError.ErrInternal, "Failed to parse database response")
 	}
 	return arr, nil
-}
-
-// ExpireOrders handles POST /orders/expire (admin only) - auto-expire unpaid orders after 24 hours
-func (s *OrdersService) ExpireOrders(w http.ResponseWriter, r *http.Request) {
-	// Find orders that are awaiting payment and expired
-	expiredOrdersURL := fmt.Sprintf("%s/rest/v1/orders?status=eq.%s&expires_at=lt.%s&select=id",
-		s.config.SupabaseURL,
-		models.OrderStatusAwaitingPayment,
-		time.Now().Format(time.RFC3339))
-
-	expiredOrders, appErr := s.getMultiple(expiredOrdersURL)
-	if appErr != nil {
-		appError.WriteErrorResponse(w, appErr, common.GenerateTraceID())
-		return
-	}
-
-	if len(expiredOrders) == 0 {
-		common.WriteSuccessResponse(w, map[string]interface{}{
-			"expired_count": 0,
-			"message":       "No expired orders found",
-		}, "No orders to expire")
-		return
-	}
-
-	// Update orders status to expired
-	expiredCount := 0
-	for _, order := range expiredOrders {
-		id, _ := order["id"].(string)
-		if id == "" {
-			continue
-		}
-		orderURL := fmt.Sprintf("%s/rest/v1/orders?id=eq.%s", s.config.SupabaseURL, id)
-		if err := s.updateRecord(orderURL, map[string]interface{}{"status": models.OrderStatusExpired}); err == nil {
-			expiredCount++
-		}
-	}
-
-	common.WriteSuccessResponse(w, map[string]interface{}{
-		"expired_count": expiredCount,
-	}, "Orders expiration completed")
 }
 
 // VerifyPayment handles POST /orders/{order_id}/verify-payment (admin only)
@@ -504,4 +589,42 @@ func (s *OrdersService) updateRecord(url string, data map[string]interface{}) er
 	}
 
 	return nil
+}
+
+// ExpireOrders handles POST /orders/expire (admin only) - auto-expire unpaid orders after 24 hours
+func (s *OrdersService) ExpireOrders(w http.ResponseWriter, r *http.Request) {
+	// Encode timestamp to avoid PostgREST filter issues
+	now := time.Now().Format(time.RFC3339)
+	nowEsc := url.QueryEscape(now)
+
+	expiredURL := fmt.Sprintf("%s/rest/v1/orders?status=eq.%s&expires_at=lt.%s&select=id", s.config.SupabaseURL, models.OrderStatusAwaitingPayment, nowEsc)
+	rows, appErr := s.getMultiple(expiredURL)
+	if appErr != nil {
+		appError.WriteErrorResponse(w, appErr, common.GenerateTraceID())
+		return
+	}
+
+	if len(rows) == 0 {
+		common.WriteSuccessResponse(w, map[string]interface{}{
+			"expired_count": 0,
+			"message":       "No expired orders found",
+		}, "No orders to expire")
+		return
+	}
+
+	expiredCount := 0
+	for _, row := range rows {
+		id, _ := row["id"].(string)
+		if id == "" {
+			continue
+		}
+		orderURL := fmt.Sprintf("%s/rest/v1/orders?id=eq.%s", s.config.SupabaseURL, id)
+		if err := s.updateRecord(orderURL, map[string]interface{}{"status": models.OrderStatusExpired}); err == nil {
+			expiredCount++
+		}
+	}
+
+	common.WriteSuccessResponse(w, map[string]interface{}{
+		"expired_count": expiredCount,
+	}, "Orders expiration completed")
 }
