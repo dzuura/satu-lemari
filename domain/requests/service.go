@@ -152,7 +152,7 @@ func (s *RequestService) CreateRequest(w http.ResponseWriter, r *http.Request) {
 	var returnDate *time.Time
 
 	switch item.Type {
-	case "donation":
+	case "donation", "thrifting":
 		if int(quantity) < 1 {
 			appError.WriteErrorResponse(w,
 				appError.New(appError.ErrInvalidInput, "Quantity is required and must be at least 1 for donation"),
@@ -535,7 +535,7 @@ func (s *RequestService) UpdateRequest(w http.ResponseWriter, r *http.Request) {
 
 	// Update stock if request is approved from pending
 	if existingRequest.Status == "approved" && oldStatus == "pending" {
-		// Decrease stock for all request types (donation & rental)
+		// Decrease stock for all request types (donation, rental, thrifting)
 		log.Printf("Request approved: decreasing stock for %s request (item: %s, quantity: %d)",
 			existingRequest.Type, existingRequest.ItemID.String(), existingRequest.Quantity)
 		err := s.updateItemStock(existingRequest.ItemID, -existingRequest.Quantity)
@@ -545,7 +545,7 @@ func (s *RequestService) UpdateRequest(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Stock only increases for RENTAL that is completed/returned, NOT for donation
+	// Stock only increases for RENTAL that is completed/returned, NOT for donation/thrifting
 	if (existingRequest.Status == "completed" || existingRequest.Status == "returned") && (oldStatus == "approved") {
 		switch existingRequest.Type {
 		case "rental":
@@ -557,10 +557,10 @@ func (s *RequestService) UpdateRequest(w http.ResponseWriter, r *http.Request) {
 				appError.WriteErrorResponse(w, appError.New(appError.ErrDatabase, "Failed to update item stock (increment)"), common.GenerateTraceID())
 				return
 			}
-		case "donation":
-			// For donation completed: stock does not increase (item is given permanently)
-			log.Printf("Donation completed: stock remains decreased for donation request (item: %s, quantity: %d)",
-				existingRequest.ItemID.String(), existingRequest.Quantity)
+		case "donation", "thrifting":
+			// For donation/thrifting completed: stock does not increase (item is given/sold)
+			log.Printf("%s completed: stock remains decreased for %s request (item: %s, quantity: %d)",
+				existingRequest.Type, existingRequest.Type, existingRequest.ItemID.String(), existingRequest.Quantity)
 		}
 	}
 

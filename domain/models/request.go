@@ -14,7 +14,7 @@ type Request struct {
 	ItemID           uuid.UUID  `json:"item_id" db:"item_id"`
 	UserID           string     `json:"user_id" db:"user_id"`       // Firebase UID
 	PartnerID        string     `json:"partner_id" db:"partner_id"` // Firebase UID
-	Type             string     `json:"type" db:"type" validate:"required,oneof=donation rental"`
+	Type             string     `json:"type" db:"type" validate:"required,oneof=donation rental thrifting"`
 	Quantity         int        `json:"quantity" db:"quantity" validate:"min=1"`
 	Reason           *string    `json:"reason,omitempty" db:"reason"`
 	ContactInfo      *string    `json:"contact_info,omitempty" db:"contact_info"`
@@ -66,7 +66,7 @@ type UpdateRequestRequest struct {
 
 // RequestFilter represents filters for request search
 type RequestFilter struct {
-	Type      *string    `json:"type,omitempty" validate:"omitempty,oneof=donation rental"`
+	Type      *string    `json:"type,omitempty" validate:"omitempty,oneof=donation rental thrifting"`
 	Status    *string    `json:"status,omitempty" validate:"omitempty,oneof=pending approved rejected completed returned"`
 	UserID    *string    `json:"user_id,omitempty"`    // Firebase UID
 	PartnerID *string    `json:"partner_id,omitempty"` // Firebase UID
@@ -110,6 +110,11 @@ func (r *Request) IsDonation() bool {
 // IsRental checks if request is for rental
 func (r *Request) IsRental() bool {
 	return r.Type == "rental"
+}
+
+// IsThrifting checks if request is for thrifting
+func (r *Request) IsThrifting() bool {
+	return r.Type == "thrifting"
 }
 
 // IsPending checks if request is pending
@@ -178,25 +183,13 @@ func (r *Request) GetDaysUntilReturn() *int {
 	return &days
 }
 
-// GetTotalCost calculates total cost for rental requests
+// GetTotalCost calculates total cost for rental/thrifting requests
 func (r *Request) GetTotalCost() *float64 {
-	if !r.IsRental() || r.Item == nil || r.Item.Price == nil {
+	if !(r.IsRental() || r.IsThrifting()) || r.Item == nil || r.Item.Price == nil {
 		return nil
 	}
-
-	// Calculate days if return date is set
-	if r.ReturnDate != nil && r.PickupDate != nil {
-		days := int(r.ReturnDate.Sub(*r.PickupDate).Hours()/24) + 1 // 1 for partial day
-		if days < 1 {
-			days = 1
-		}
-		cost := *r.Item.Price * float64(days) * float64(r.Quantity)
-		return &cost
-	}
-
-	// Default to single day cost
-	cost := *r.Item.Price * float64(r.Quantity)
-	return &cost
+	amount := float64(r.Quantity) * *r.Item.Price
+	return &amount
 }
 
 // GetFormattedTotalCost returns formatted total cost
@@ -233,6 +226,8 @@ func (r *Request) GetTypeLabel() string {
 		return "Donasi"
 	case "rental":
 		return "Sewa"
+	case "thrifting":
+		return "Thrifting"
 	default:
 		return "Unknown"
 	}

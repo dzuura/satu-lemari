@@ -48,7 +48,7 @@ CREATE TABLE IF NOT EXISTS items (
     description TEXT,
     size VARCHAR(10) NOT NULL,
     color VARCHAR(50),
-    type VARCHAR(20) CHECK (type IN ('donation', 'rental')) NOT NULL,
+    type VARCHAR(20) CHECK (type IN ('donation', 'rental', 'thrifting')) NOT NULL,
     price DECIMAL(10, 2) DEFAULT 0, -- for rental items
     total_quantity INTEGER NOT NULL DEFAULT 1,
     available_quantity INTEGER NOT NULL DEFAULT 1,
@@ -65,7 +65,7 @@ CREATE TABLE IF NOT EXISTS requests (
     item_id UUID NOT NULL REFERENCES items(id) ON DELETE CASCADE,
     user_id VARCHAR(128) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     partner_id VARCHAR(128) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    type VARCHAR(20) CHECK (type IN ('donation', 'rental')) NOT NULL,
+    type VARCHAR(20) CHECK (type IN ('donation', 'rental', 'thrifting')) NOT NULL,
     quantity INTEGER NOT NULL DEFAULT 1,
     reason TEXT,
     contact_info VARCHAR(255),
@@ -88,7 +88,7 @@ CREATE TABLE IF NOT EXISTS transactions (
     item_id UUID NOT NULL REFERENCES items(id),
     user_id VARCHAR(128) NOT NULL REFERENCES users(id),
     partner_id VARCHAR(128) NOT NULL REFERENCES users(id),
-    type VARCHAR(20) CHECK (type IN ('donation', 'rental')) NOT NULL,
+    type VARCHAR(20) CHECK (type IN ('donation', 'rental', 'thrifting')) NOT NULL,
     quantity INTEGER NOT NULL,
     amount DECIMAL(10, 2) DEFAULT 0, -- for rental
     status VARCHAR(20) CHECK (status IN ('active', 'completed', 'cancelled')) DEFAULT 'active',
@@ -204,6 +204,76 @@ CREATE TABLE IF NOT EXISTS chat_messages (
     metadata JSONB DEFAULT '{}'
 );
 
+-- Orders table
+CREATE TABLE IF NOT EXISTS orders (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    item_id UUID NOT NULL REFERENCES items(id) ON DELETE RESTRICT,
+    buyer_id VARCHAR(128) NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    seller_id VARCHAR(128) NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    request_id UUID,
+    type VARCHAR(20) CHECK (type IN ('thrifting','donation','rental')) NOT NULL DEFAULT 'thrifting',
+    shipping_method VARCHAR(30) CHECK (shipping_method IN ('direct_cod','app_agent','pickup_warehouse')) NOT NULL,
+    status VARCHAR(30) CHECK (status IN ('pending','awaiting_payment','paid','processing','shipped','delivered','completed','cancelled','expired')) NOT NULL DEFAULT 'awaiting_payment',
+    item_price DECIMAL(10,2) NOT NULL DEFAULT 0,
+    shipping_fee DECIMAL(10,2) NOT NULL DEFAULT 0,
+    total_amount DECIMAL(10,2) NOT NULL DEFAULT 0,
+    weight_kg DECIMAL(6,2),
+    distance_km DECIMAL(7,2),
+    notes TEXT,
+    expires_at TIMESTAMP WITH TIME ZONE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Payments table
+CREATE TABLE IF NOT EXISTS payments (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    order_id UUID NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+    method VARCHAR(20) CHECK (method IN ('qris')) NOT NULL DEFAULT 'qris',
+    status VARCHAR(20) CHECK (status IN ('pending','paid','rejected')) NOT NULL DEFAULT 'pending',
+    amount DECIMAL(10,2) NOT NULL,
+    qris_payload TEXT,
+    qris_image_url TEXT,
+    paid_at TIMESTAMP WITH TIME ZONE,
+    verified_by VARCHAR(128),
+    verified_at TIMESTAMP WITH TIME ZONE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Delivery slots table
+CREATE TABLE IF NOT EXISTS delivery_slots (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    slot_type VARCHAR(30) CHECK (slot_type IN ('pickup_seller','delivery_buyer','pickup_buyer_warehouse')) NOT NULL,
+    start_time TIMESTAMP WITH TIME ZONE NOT NULL,
+    end_time TIMESTAMP WITH TIME ZONE NOT NULL,
+    capacity INTEGER NOT NULL DEFAULT 1,
+    available INTEGER NOT NULL DEFAULT 1,
+    location_name VARCHAR(255),
+    address TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Shipments table
+CREATE TABLE IF NOT EXISTS shipments (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    order_id UUID NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+    method VARCHAR(30) CHECK (method IN ('direct_cod','app_agent','pickup_warehouse')) NOT NULL,
+    status VARCHAR(30) CHECK (status IN ('pending','scheduled','picked_up','in_transit','delivered','cancelled')) NOT NULL DEFAULT 'pending',
+    payer VARCHAR(20) CHECK (payer IN ('buyer','seller','app')) NOT NULL DEFAULT 'buyer',
+    pickup_slot_id UUID REFERENCES delivery_slots(id) ON DELETE SET NULL,
+    delivery_slot_id UUID REFERENCES delivery_slots(id) ON DELETE SET NULL,
+    distance_km DECIMAL(7,2),
+    weight_kg DECIMAL(6,2),
+    base_fee DECIMAL(10,2) NOT NULL DEFAULT 0,
+    extra_fee DECIMAL(10,2) NOT NULL DEFAULT 0,
+    total_fee DECIMAL(10,2) NOT NULL DEFAULT 0,
+    notes TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
 -- Insert default categories
 INSERT INTO categories (name, description, icon) VALUES
 ('Pakaian Formal', 'Pakaian profesional dan formal', 'formal'),
@@ -260,6 +330,19 @@ CREATE INDEX IF NOT EXISTS idx_chat_sessions_is_active ON chat_sessions(is_activ
 CREATE INDEX IF NOT EXISTS idx_chat_messages_session_id ON chat_messages(session_id);
 CREATE INDEX IF NOT EXISTS idx_chat_messages_timestamp ON chat_messages(timestamp);
 CREATE INDEX IF NOT EXISTS idx_chat_messages_role ON chat_messages(role);
+-- Orders indexes
+CREATE INDEX IF NOT EXISTS idx_orders_buyer ON orders(buyer_id);
+CREATE INDEX IF NOT EXISTS idx_orders_seller ON orders(seller_id);
+CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
+CREATE INDEX IF NOT EXISTS idx_orders_type ON orders(type);
+-- Payments indexes
+CREATE INDEX IF NOT EXISTS idx_payments_order ON payments(order_id);
+CREATE INDEX IF NOT EXISTS idx_payments_status ON payments(status);
+-- Shipments indexes
+CREATE INDEX IF NOT EXISTS idx_shipments_order ON shipments(order_id);
+CREATE INDEX IF NOT EXISTS idx_shipments_status ON shipments(status);
+-- Delivery slots indexes
+CREATE INDEX IF NOT EXISTS idx_delivery_slots_time ON delivery_slots(start_time, end_time);
 
 -- Functions for automatic updates
 CREATE OR REPLACE FUNCTION update_updated_at_column()
@@ -338,6 +421,19 @@ BEGIN
     RETURN deleted_count;
 END;
 $$ LANGUAGE plpgsql;
+
+-- Triggers for updated_at
+DROP TRIGGER IF EXISTS update_orders_updated_at ON orders;
+CREATE TRIGGER update_orders_updated_at BEFORE UPDATE ON orders FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+DROP TRIGGER IF EXISTS update_payments_updated_at ON payments;
+CREATE TRIGGER update_payments_updated_at BEFORE UPDATE ON payments FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+DROP TRIGGER IF EXISTS update_shipments_updated_at ON shipments;
+CREATE TRIGGER update_shipments_updated_at BEFORE UPDATE ON shipments FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+DROP TRIGGER IF EXISTS update_delivery_slots_updated_at ON delivery_slots;
+CREATE TRIGGER update_delivery_slots_updated_at BEFORE UPDATE ON delivery_slots FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 -- Enable RLS on all tables
 ALTER TABLE users ENABLE ROW LEVEL SECURITY;

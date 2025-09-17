@@ -74,6 +74,10 @@ type Config struct {
 
 	// Development/Debug Settings
 	Debug bool
+
+	// Warehouse configuration
+	WarehouseLat float64
+	WarehouseLng float64
 }
 
 func LoadConfig() *Config {
@@ -149,6 +153,10 @@ func LoadConfig() *Config {
 
 		// Development/Debug Settings
 		Debug: getEnvAsBool("DEBUG", false),
+
+		// Warehouse configuration (defaults to Yogyakarta center)
+		WarehouseLat: getEnvAsFloat("WAREHOUSE_LAT", -7.775347),
+		WarehouseLng: getEnvAsFloat("WAREHOUSE_LNG", 110.373999),
 	}
 
 	// Validate required configuration
@@ -202,6 +210,15 @@ func getEnvAsSlice(key string, defaultValue []string) []string {
 			slice[i] = strings.TrimSpace(v)
 		}
 		return slice
+	}
+	return defaultValue
+}
+
+func getEnvAsFloat(key string, defaultValue float64) float64 {
+	if value := os.Getenv(key); value != "" {
+		if f, err := strconv.ParseFloat(value, 64); err == nil {
+			return f
+		}
 	}
 	return defaultValue
 }

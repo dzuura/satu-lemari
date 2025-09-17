@@ -11,25 +11,19 @@ type Transaction struct {
 	ID               uuid.UUID  `json:"id" db:"id"`
 	RequestID        uuid.UUID  `json:"request_id" db:"request_id"`
 	ItemID           uuid.UUID  `json:"item_id" db:"item_id"`
-	UserID           string     `json:"user_id" db:"user_id"`       // Firebase UID
-	PartnerID        string     `json:"partner_id" db:"partner_id"` // Firebase UID
-	Type             string     `json:"type" db:"type" validate:"required,oneof=donation rental"`
-	Quantity         int        `json:"quantity" db:"quantity" validate:"min=1"`
+	UserID           string     `json:"user_id" db:"user_id"`
+	PartnerID        string     `json:"partner_id" db:"partner_id"`
+	Type             string     `json:"type" db:"type" validate:"required,oneof=donation rental thrifting"`
+	Quantity         int        `json:"quantity" db:"quantity"`
 	Amount           float64    `json:"amount" db:"amount"`
 	Status           string     `json:"status" db:"status" validate:"oneof=active completed cancelled"`
-	PickupDate       *time.Time `json:"pickup_date,omitempty" db:"pickup_date"`
-	ReturnDate       *time.Time `json:"return_date,omitempty" db:"return_date"`
-	ActualReturnDate *time.Time `json:"actual_return_date,omitempty" db:"actual_return_date"`
-	Rating           *int       `json:"rating,omitempty" db:"rating" validate:"omitempty,min=1,max=5"`
+	PickupDate       *time.Time `json:"pickup_date,omitempty" db:"pickup_date"`               // For rental only
+	ReturnDate       *time.Time `json:"return_date,omitempty" db:"return_date"`               // For rental only
+	ActualReturnDate *time.Time `json:"actual_return_date,omitempty" db:"actual_return_date"` // For rental only
+	Rating           *int       `json:"rating,omitempty" db:"rating"`
 	Review           *string    `json:"review,omitempty" db:"review"`
 	CreatedAt        time.Time  `json:"created_at" db:"created_at"`
 	UpdatedAt        time.Time  `json:"updated_at" db:"updated_at"`
-
-	// Relations (will be populated when needed)
-	Request *Request     `json:"request,omitempty"`
-	Item    *Item        `json:"item,omitempty"`
-	User    *UserProfile `json:"user,omitempty"`
-	Partner *UserProfile `json:"partner,omitempty"`
 }
 
 // CreateTransactionRequest represents request to create a new transaction
@@ -49,7 +43,7 @@ type UpdateTransactionRequest struct {
 
 // TransactionFilter represents filters for transaction search
 type TransactionFilter struct {
-	Type      *string    `json:"type,omitempty" validate:"omitempty,oneof=donation rental"`
+	Type      *string    `json:"type,omitempty" validate:"omitempty,oneof=donation rental thrifting"`
 	Status    *string    `json:"status,omitempty" validate:"omitempty,oneof=active completed cancelled"`
 	UserID    *string    `json:"user_id,omitempty"`    // Firebase UID
 	PartnerID *string    `json:"partner_id,omitempty"` // Firebase UID
@@ -82,6 +76,11 @@ func (t *Transaction) IsDonation() bool {
 // IsRental checks if transaction is for rental
 func (t *Transaction) IsRental() bool {
 	return t.Type == "rental"
+}
+
+// IsThrifting checks if transaction is for thrifting
+func (t *Transaction) IsThrifting() bool {
+	return t.Type == "thrifting"
 }
 
 // IsActive checks if transaction is active
@@ -187,6 +186,8 @@ func (t *Transaction) GetTypeLabel() string {
 		return "Donasi"
 	case "rental":
 		return "Sewa"
+	case "thrifting":
+		return "Thrifting"
 	default:
 		return "Unknown"
 	}

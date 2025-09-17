@@ -223,8 +223,10 @@ func (d *Database) Insert(ctx context.Context, table string, data interface{}) (
 		return nil, fmt.Errorf("failed to create request: %v", err)
 	}
 
-	// Use service role key for system operations to bypass RLS
-	if table == "fcm_tokens" || table == "notifications" {
+	// Use service role key for privileged/system tables
+	useServiceRole := table == "fcm_tokens" || table == "notifications" ||
+		table == "orders" || table == "payments" || table == "shipments" || table == "delivery_slots"
+	if useServiceRole {
 		req.Header.Set("apikey", d.config.SupabaseServiceRoleKey)
 		req.Header.Set("Authorization", "Bearer "+d.config.SupabaseServiceRoleKey)
 	} else {
@@ -251,7 +253,6 @@ func (d *Database) Insert(ctx context.Context, table string, data interface{}) (
 		return nil, fmt.Errorf("failed to read response: %v", err)
 	}
 
-	log.Printf("Insert response: %s", string(body))
 	return &Rows{data: body}, nil
 }
 
@@ -270,8 +271,10 @@ func (d *Database) Upsert(ctx context.Context, table string, data interface{}, c
 		return nil, fmt.Errorf("failed to create request: %v", err)
 	}
 
-	// Use service role key for system operations to bypass RLS
-	if table == "fcm_tokens" || table == "notifications" {
+	// Use service role key for privileged/system tables
+	useServiceRole := table == "fcm_tokens" || table == "notifications" ||
+		table == "orders" || table == "payments" || table == "shipments" || table == "delivery_slots"
+	if useServiceRole {
 		req.Header.Set("apikey", d.config.SupabaseServiceRoleKey)
 		req.Header.Set("Authorization", "Bearer "+d.config.SupabaseServiceRoleKey)
 	} else {
@@ -447,4 +450,8 @@ func (r *Rows) Next() bool {
 
 func (r *Rows) Close() error {
 	return nil
+}
+
+func (r *Rows) Data() []byte {
+	return r.data
 }

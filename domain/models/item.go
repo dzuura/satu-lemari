@@ -16,7 +16,7 @@ type Item struct {
 	Description       *string   `json:"description,omitempty" db:"description"`
 	Size              string    `json:"size" db:"size" validate:"required"`
 	Color             *string   `json:"color,omitempty" db:"color"`
-	Type              string    `json:"type" db:"type" validate:"required,oneof=donation rental"`
+	Type              string    `json:"type" db:"type" validate:"required,oneof=donation rental thrifting"`
 	Price             *float64  `json:"price,omitempty" db:"price"`
 	TotalQuantity     int       `json:"total_quantity" db:"total_quantity" validate:"min=1"`
 	AvailableQuantity int       `json:"available_quantity" db:"available_quantity"`
@@ -38,7 +38,7 @@ type CreateItemRequest struct {
 	Description   *string   `json:"description,omitempty"`
 	Size          string    `json:"size" validate:"required"`
 	Color         *string   `json:"color,omitempty"`
-	Type          string    `json:"type" validate:"required,oneof=donation rental"`
+	Type          string    `json:"type" validate:"required,oneof=donation rental thrifting"`
 	Price         *float64  `json:"price,omitempty"`
 	TotalQuantity int       `json:"total_quantity" validate:"min=1"`
 	Condition     string    `json:"condition" validate:"oneof=excellent good fair"`
@@ -62,7 +62,7 @@ type UpdateItemRequest struct {
 // ItemFilter represents filters for item search
 type ItemFilter struct {
 	CategoryID *uuid.UUID `json:"category_id,omitempty"`
-	Type       *string    `json:"type,omitempty" validate:"omitempty,oneof=donation rental"`
+	Type       *string    `json:"type,omitempty" validate:"omitempty,oneof=donation rental thrifting"`
 	Size       *string    `json:"size,omitempty"`
 	Color      *string    `json:"color,omitempty"`
 	Condition  *string    `json:"condition,omitempty" validate:"omitempty,oneof=excellent good fair"`
@@ -117,6 +117,11 @@ func (i *Item) IsRental() bool {
 	return i.Type == "rental"
 }
 
+// IsThrifting checks if item is for thrifting (buy/sell)
+func (i *Item) IsThrifting() bool {
+	return i.Type == "thrifting"
+}
+
 // IsAvailable checks if item is available for request
 func (i *Item) IsAvailable() bool {
 	return i.Status == "active" && i.AvailableQuantity > 0
@@ -135,9 +140,9 @@ func (i *Item) GetMainImage() string {
 	return ""
 }
 
-// GetFormattedPrice returns formatted price for rental items
+// GetFormattedPrice returns formatted price for rental/thrifting items
 func (i *Item) GetFormattedPrice() string {
-	if i.Price != nil && i.IsRental() {
+	if i.Price != nil && (i.IsRental() || i.IsThrifting()) {
 		return FormatCurrency(*i.Price)
 	}
 	return "Free" // For donations

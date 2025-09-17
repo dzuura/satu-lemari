@@ -24,6 +24,7 @@ import (
 	"github.com/dzuura/satu-lemari/domain/logging"
 	"github.com/dzuura/satu-lemari/domain/middleware"
 	"github.com/dzuura/satu-lemari/domain/notification"
+	"github.com/dzuura/satu-lemari/domain/orders"
 	"github.com/dzuura/satu-lemari/domain/requests"
 	"github.com/dzuura/satu-lemari/domain/security"
 	"github.com/dzuura/satu-lemari/domain/user"
@@ -36,6 +37,7 @@ type Server struct {
 	categoryService     *category.CategoryService
 	itemService         *item.ItemService
 	requestService      *requests.RequestService
+	ordersService       *orders.OrdersService
 	notificationService *notification.NotificationService
 	notificationHandler *notification.NotificationHandler
 	aiService           *ai.AIServiceManager
@@ -159,6 +161,9 @@ func NewServer(cfg *config.Config) (*Server, error) {
 	// Initialize request service with notification service
 	requestService := requests.NewRequestService(cfg, notificationService)
 
+	// Initialize orders service
+	ordersService := orders.NewOrdersService(cfg, db)
+
 	// Initialize chat service
 	chatService := chat.NewChatService(cfg, db, redisCache, aiService, itemService, userService)
 	chatHandler := chat.NewChatHandler(chatService)
@@ -175,6 +180,7 @@ func NewServer(cfg *config.Config) (*Server, error) {
 		categoryService:     categoryService,
 		itemService:         itemService,
 		requestService:      requestService,
+		ordersService:       ordersService,
 		notificationService: notificationService,
 		notificationHandler: notificationHandler,
 		aiService:           aiService,
@@ -298,6 +304,13 @@ func (s *Server) registerRoutes(api *mux.Router) {
 
 	// Protected request routes
 	protectedRoutes.HandleFunc("/requests", s.requestService.CreateRequest).Methods("POST")
+	// Protected orders routes
+	protectedRoutes.HandleFunc("/orders", s.ordersService.CreateOrder).Methods("POST")
+	protectedRoutes.HandleFunc("/orders", s.ordersService.ListOrders).Methods("GET")
+	protectedRoutes.HandleFunc("/orders/my", s.ordersService.GetMyOrders).Methods("GET")
+	protectedRoutes.HandleFunc("/orders/partner", s.ordersService.GetPartnerOrders).Methods("GET")
+	protectedRoutes.HandleFunc("/orders/{order_id}", s.ordersService.GetOrder).Methods("GET")
+	protectedRoutes.HandleFunc("/orders/{order_id}", s.ordersService.DeleteOrder).Methods("DELETE")
 	protectedRoutes.HandleFunc("/requests/my", s.requestService.GetMyRequests).Methods("GET")
 	protectedRoutes.HandleFunc("/requests/partner", s.requestService.GetPartnerRequests).Methods("GET")
 	protectedRoutes.HandleFunc("/requests/{request_id}", s.requestService.GetRequestByID).Methods("GET")
@@ -324,6 +337,12 @@ func (s *Server) registerRoutes(api *mux.Router) {
 
 	// Admin category routes
 	s.categoryService.RegisterAdminRoutes(adminRoutes)
+
+	// Admin orders routes
+	adminRoutes.HandleFunc("/orders", s.ordersService.ListOrders).Methods("GET")
+	adminRoutes.HandleFunc("/orders/{order_id}", s.ordersService.GetOrder).Methods("GET")
+	adminRoutes.HandleFunc("/orders/{order_id}/verify-payment", s.ordersService.VerifyPayment).Methods("POST")
+	adminRoutes.HandleFunc("/orders/expire", s.ordersService.ExpireOrders).Methods("POST")
 }
 
 func (s *Server) healthCheck(w http.ResponseWriter, r *http.Request) {
@@ -381,7 +400,7 @@ func (s *Server) welcome(w http.ResponseWriter, r *http.Request) {
 	response := map[string]interface{}{
 		"message":     "Welcome to SatuLemari API",
 		"version":     "1.0.0",
-		"description": "Donation and rental clothing platform API",
+		"description": "Donation, rental, and thrifting clothing platform API",
 		"docs":        "/docs",
 		"health":      "/health",
 		"endpoints": map[string]interface{}{
