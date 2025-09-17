@@ -6,6 +6,7 @@ Platform donasi dan rental pakaian yang menghubungkan mitra (pemilik pakaian) de
 
 - **Authentication & Authorization**: Firebase Auth dengan JWT token
 - **Donasi & Rental System**: Sistem manajemen pakaian untuk donasi dan sewa
+- **Order Management**: Sistem manajemen pesanan dengan tracking status dan notifikasi
 - **AI Integration**: Smart listing assistant, intent matching, dan personalized recommendations (Gemini AI)
 - **Intelligent Chatbot**: AI-powered chatbot untuk bantuan donasi, sewa, dan edukasi fashion berkelanjutan
 - **File Storage**: Supabase Storage untuk upload gambar
@@ -25,7 +26,7 @@ SatuLemari/
 ├── cmd/
 │   └── main.go                 # Entry point aplikasi
 ├── domain/
-│   ├── ai/                     # AI services
+│   ├── ai/                     # AI services & recommendation
 │   ├── auth/                   # Authentication & Authorization
 │   ├── cache/                  # Redis caching
 │   ├── category/               # Category management
@@ -39,6 +40,7 @@ SatuLemari/
 │   ├── middleware/             # HTTP middleware
 │   ├── models/                 # Data models
 │   ├── notification/           # Notification services
+│   ├── orders/                 # Order processing & management
 │   ├── queue/                  # Queue system
 │   ├── repository/             # Data access layer
 │   ├── requests/               # Request management
@@ -181,6 +183,15 @@ Authorization: Bearer <firebase_id_token>
 - `PUT /items/{item_id}` - Update item (protected)
 - `PATCH /items/{item_id}/status` - Update item status (protected)
 - `DELETE /items/{item_id}` - Delete item (protected)
+
+#### Orders
+
+- `POST /orders` - Create new order (protected)
+- `GET /orders` - List orders with filters (protected - user: own orders, admin: all orders)
+- `GET /orders/my` - Get current user's orders as buyer (protected - USER ROLE ONLY)
+- `GET /orders/partner` - Get orders for partner's items as seller (protected - PARTNER ROLE ONLY)
+- `GET /orders/{order_id}` - Get specific order details (protected)
+- `DELETE /orders/{order_id}` - Cancel order (protected)
 
 #### Requests
 
