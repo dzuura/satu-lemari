@@ -124,9 +124,30 @@ func (s *OrdersService) CreateOrder(w http.ResponseWriter, r *http.Request) {
 		available = v
 	}
 
-	if status != "active" || int(available) < 1 {
-		appError.WriteErrorResponse(w, appError.New(appError.ErrItemNotAvailable, "Item is not available"), common.GenerateTraceID())
-		return
+	// For donation items, check if there's an approved request instead of available quantity
+	var approvedRequestID *string
+	if itemType == "donation" {
+		if status != "active" {
+			appError.WriteErrorResponse(w, appError.New(appError.ErrItemNotAvailable, "Item is not available"), common.GenerateTraceID())
+			return
+		}
+		// Check if there's an approved request for this item and user
+		requestURL := fmt.Sprintf("%s/rest/v1/requests?item_id=eq.%s&user_id=eq.%s&status=eq.approved&deleted_by_user=eq.false&deleted_by_partner=eq.false", s.config.SupabaseURL, req.ItemID.String(), userID)
+		requests, appErr := s.getMultiple(requestURL)
+		if appErr != nil || len(requests) == 0 {
+			appError.WriteErrorResponse(w, appError.New(appError.ErrItemNotAvailable, "No approved donation request found for this item"), common.GenerateTraceID())
+			return
+		}
+		// Get the request ID for linking
+		if requestID, ok := requests[0]["id"].(string); ok {
+			approvedRequestID = &requestID
+		}
+	} else {
+		// For rental and thrifting items, check available quantity
+		if status != "active" || int(available) < 1 {
+			appError.WriteErrorResponse(w, appError.New(appError.ErrItemNotAvailable, "Item is not available"), common.GenerateTraceID())
+			return
+		}
 	}
 	// Validate item type and shipping method compatibility
 	if itemType == "rental" && req.ShippingMethod != models.ShippingMethodDirectCOD {
@@ -169,15 +190,30 @@ func (s *OrdersService) CreateOrder(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Calculate shipping fee based on item type and seller delivery choice
-	shippingFee := s.calculateShippingFee(itemType, req.ShippingMethod, &totalDistanceForBuyer, req.SellerDeliveryChoice)
+	// Calculate shipping fee for buyer
+	buyerShippingFee := s.calculateShippingFee(itemType, req.ShippingMethod, &totalDistanceForBuyer, req.WeightKg)
+
+	// Calculate shipping fee for seller (from seller to warehouse)
+	var sellerShippingFee float64
+	if req.ShippingMethod == models.ShippingMethodAppAgent ||
+		(req.ShippingMethod == models.ShippingMethodPickupWarehouse &&
+			req.SellerDeliveryChoice != nil && *req.SellerDeliveryChoice == models.SellerDeliveryAgentPickup) {
+		// Calculate distance from seller to warehouse
+		warehouseLat := s.config.WarehouseLat
+		warehouseLng := s.config.WarehouseLng
+		sellerLat, sellerLng, serr := s.getUserCoords(r.Context(), partnerID)
+		if serr == nil {
+			distanceSellerToWarehouse := haversineKm(sellerLat, sellerLng, warehouseLat, warehouseLng)
+			sellerShippingFee = s.calculateSellerShippingFee(&distanceSellerToWarehouse, req.WeightKg)
+		}
+	}
 
 	// For donation items, price is always 0
 	if itemType == "donation" {
 		priceVal = 0
 	}
 
-	total := priceVal + shippingFee
+	total := priceVal + buyerShippingFee
 	expiresAt := time.Now().Add(24 * time.Hour)
 
 	// Build order payload for insert
@@ -189,12 +225,17 @@ func (s *OrdersService) CreateOrder(w http.ResponseWriter, r *http.Request) {
 		"shipping_method": req.ShippingMethod,
 		"status":          models.OrderStatusAwaitingPayment,
 		"item_price":      priceVal,
-		"shipping_fee":    shippingFee,
+		"shipping_fee":    buyerShippingFee,
 		"total_amount":    total,
 		"weight_kg":       req.WeightKg,
 		"distance_km":     totalDistanceForBuyer,
 		"notes":           req.Notes,
 		"expires_at":      expiresAt,
+	}
+
+	// Add request_id for donation items
+	if approvedRequestID != nil {
+		orderPayload["request_id"] = *approvedRequestID
 	}
 
 	rows, err := s.db.Insert(r.Context(), "orders", []map[string]interface{}{orderPayload})
@@ -229,8 +270,13 @@ func (s *OrdersService) CreateOrder(w http.ResponseWriter, r *http.Request) {
 		"order_id":     orderID.String(),
 		"status":       models.OrderStatusAwaitingPayment,
 		"item_price":   priceVal,
-		"shipping_fee": shippingFee,
+		"shipping_fee": buyerShippingFee,
 		"total_amount": total,
+		"shipping_details": map[string]interface{}{
+			"buyer_fee":  buyerShippingFee,
+			"seller_fee": sellerShippingFee,
+			"method":     req.ShippingMethod,
+		},
 		"qris": map[string]interface{}{
 			"method":  "qris",
 			"payload": qrisPayload,
@@ -241,8 +287,9 @@ func (s *OrdersService) CreateOrder(w http.ResponseWriter, r *http.Request) {
 	common.WriteSuccessResponse(w, response, "Order created successfully")
 }
 
-func (s *OrdersService) calculateShippingFee(itemType, method string, distanceKm *float64, _ *string) float64 {
-	// direct COD => 0 from app side
+// calculateShippingFee calculates shipping fee based on new zone-based system
+func (s *OrdersService) calculateShippingFee(itemType, method string, distanceKm *float64, weightKg *float64) float64 {
+	// Direct COD is always free
 	if method == models.ShippingMethodDirectCOD {
 		return 0
 	}
@@ -252,30 +299,113 @@ func (s *OrdersService) calculateShippingFee(itemType, method string, distanceKm
 		return 0
 	}
 
-	if distanceKm == nil {
+	// For pickup_warehouse method, buyer pays 0 (seller handles delivery to warehouse)
+	if method == models.ShippingMethodPickupWarehouse {
 		return 0
 	}
-
-	d := *distanceKm
-	if d <= 2.0 {
-		return 0
-	}
-
-	extraKm := math.Ceil(d - 2.0)
-	shippingFee := extraKm * 3000
 
 	// For donation items, shipping fee is always 0 for buyer (seller pays)
 	if itemType == "donation" {
 		return 0
 	}
 
-	// For pickup_warehouse method, buyer pays 0 (seller handles delivery to warehouse)
-	if method == models.ShippingMethodPickupWarehouse {
+	// Only app_agent method charges buyer
+	if method != models.ShippingMethodAppAgent {
 		return 0
 	}
 
-	// For thrifting items with app_agent method, buyer pays shipping fee
-	return shippingFee
+	if distanceKm == nil {
+		return 0
+	}
+
+	// Default weight 1kg if not specified
+	weight := 1.0
+	if weightKg != nil && *weightKg > 0 {
+		weight = *weightKg
+	}
+
+	distance := *distanceKm
+	if distance <= 0 {
+		return 0
+	}
+
+	// Calculate base rate based on zone
+	baseRate := s.getBaseRate(distance)
+
+	// Calculate weight multiplier
+	weightMultiplier := s.getWeightMultiplier(weight)
+
+	// Calculate shipping fee
+	shippingFee := distance * baseRate * weightMultiplier
+
+	// Round to nearest Rp 500
+	roundedFee := s.roundToNearest500(shippingFee)
+
+	return roundedFee
+}
+
+// getBaseRate returns base rate per km based on distance zone
+func (s *OrdersService) getBaseRate(distanceKm float64) float64 {
+	switch {
+	case distanceKm <= 10:
+		return 1000 // Zone 1: 0-10km
+	case distanceKm <= 25:
+		return 2000 // Zone 2: 10-25km
+	case distanceKm <= 50:
+		return 3000 // Zone 3: 25-50km
+	default:
+		return 4000 // Zone 4: >50km
+	}
+}
+
+// getWeightMultiplier returns weight multiplier based on weight
+func (s *OrdersService) getWeightMultiplier(weightKg float64) float64 {
+	switch {
+	case weightKg <= 1:
+		return 1.0 // 0-1kg: 1x
+	case weightKg <= 3:
+		return 1.5 // 1-3kg: 1.5x
+	case weightKg <= 5:
+		return 2.0 // 3-5kg: 2x
+	case weightKg <= 10:
+		return 3.0 // 5-10kg: 3x
+	default:
+		return 4.0 // >10kg: 4x
+	}
+}
+
+// roundToNearest500 rounds amount to nearest Rp 500
+func (s *OrdersService) roundToNearest500(amount float64) float64 {
+	return math.Ceil(amount/500) * 500
+}
+
+// calculateSellerShippingFee calculates shipping fee for seller (from seller to warehouse)
+func (s *OrdersService) calculateSellerShippingFee(distanceKm *float64, weightKg *float64) float64 {
+	if distanceKm == nil || *distanceKm <= 0 {
+		return 0
+	}
+
+	// Default weight 1kg if not specified
+	weight := 1.0
+	if weightKg != nil && *weightKg > 0 {
+		weight = *weightKg
+	}
+
+	distance := *distanceKm
+
+	// Calculate base rate based on zone
+	baseRate := s.getBaseRate(distance)
+
+	// Calculate weight multiplier
+	weightMultiplier := s.getWeightMultiplier(weight)
+
+	// Calculate shipping fee
+	shippingFee := distance * baseRate * weightMultiplier
+
+	// Round to nearest Rp 500
+	roundedFee := s.roundToNearest500(shippingFee)
+
+	return roundedFee
 }
 
 // ListOrders handles GET /orders (protected) - get all orders with filters
