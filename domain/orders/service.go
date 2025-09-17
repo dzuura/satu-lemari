@@ -278,8 +278,14 @@ func (s *OrdersService) calculateShippingFee(itemType, method string, distanceKm
 	return shippingFee
 }
 
-// ListOrders handles GET /orders (admin)
+// ListOrders handles GET /orders (protected) - get all orders with filters
 func (s *OrdersService) ListOrders(w http.ResponseWriter, r *http.Request) {
+	userID, ok := common.GetUserIDFromContext(r)
+	if !ok {
+		appError.WriteErrorResponse(w, appError.New(appError.ErrUnauthorized, "Unauthorized"), common.GenerateTraceID())
+		return
+	}
+
 	// Build filters
 	q := url.Values{}
 	q.Set("select", "*")
@@ -291,16 +297,33 @@ func (s *OrdersService) ListOrders(w http.ResponseWriter, r *http.Request) {
 	pageStr := r.URL.Query().Get("page")
 	limitStr := r.URL.Query().Get("limit")
 
+	// For regular users, only show their own orders
+	// For admin users, show all orders
+	// Get user role from database
+	userRole := "user" // default
+	userURL := fmt.Sprintf("%s/rest/v1/users?id=eq.%s&select=role", s.config.SupabaseURL, userID)
+	userInfo, appErr := s.getSingle(userURL)
+	if appErr == nil {
+		if role, ok := userInfo["role"].(string); ok {
+			userRole = role
+		}
+	}
+
+	if userRole != "admin" {
+		// Regular user: only show orders where they are buyer or seller
+		q.Set("or", fmt.Sprintf("(buyer_id.eq.%s,seller_id.eq.%s)", userID, userID))
+	}
+
 	if status != "" {
 		q.Set("status", "eq."+status)
 	}
 	if orderType != "" {
 		q.Set("type", "eq."+orderType)
 	}
-	if buyerID != "" {
+	if buyerID != "" && userRole == "admin" {
 		q.Set("buyer_id", "eq."+buyerID)
 	}
-	if sellerID != "" {
+	if sellerID != "" && userRole == "admin" {
 		q.Set("seller_id", "eq."+sellerID)
 	}
 
@@ -326,32 +349,38 @@ func (s *OrdersService) ListOrders(w http.ResponseWriter, r *http.Request) {
 
 	// Total count
 	countURL := fmt.Sprintf("%s/rest/v1/orders?select=count", s.config.SupabaseURL)
-	if status != "" || orderType != "" || buyerID != "" || sellerID != "" {
+	if userRole != "admin" {
+		countURL = fmt.Sprintf("%s/rest/v1/orders?select=count&or=(buyer_id.eq.%s,seller_id.eq.%s)", s.config.SupabaseURL, userID, userID)
+	}
+	if status != "" || orderType != "" || (buyerID != "" && userRole == "admin") || (sellerID != "" && userRole == "admin") {
 		// reapply filters for count
 		cq := url.Values{}
 		cq.Set("select", "count")
+		if userRole != "admin" {
+			cq.Set("or", fmt.Sprintf("(buyer_id.eq.%s,seller_id.eq.%s)", userID, userID))
+		}
 		if status != "" {
 			cq.Set("status", "eq."+status)
 		}
 		if orderType != "" {
 			cq.Set("type", "eq."+orderType)
 		}
-		if buyerID != "" {
+		if buyerID != "" && userRole == "admin" {
 			cq.Set("buyer_id", "eq."+buyerID)
 		}
-		if sellerID != "" {
+		if sellerID != "" && userRole == "admin" {
 			cq.Set("seller_id", "eq."+sellerID)
 		}
 		countURL = fmt.Sprintf("%s/rest/v1/orders?%s", s.config.SupabaseURL, cq.Encode())
 	}
-	rows, err := http.NewRequest(http.MethodGet, countURL, nil)
+	req, err := http.NewRequest(http.MethodGet, countURL, nil)
 	if err != nil {
 		appError.WriteErrorResponse(w, appError.New(appError.ErrInternal, "Failed to build count request"), common.GenerateTraceID())
 		return
 	}
-	rows.Header.Set("apikey", s.config.SupabaseServiceRoleKey)
-	rows.Header.Set("Authorization", "Bearer "+s.config.SupabaseServiceRoleKey)
-	resp, err := http.DefaultClient.Do(rows)
+	req.Header.Set("apikey", s.config.SupabaseServiceRoleKey)
+	req.Header.Set("Authorization", "Bearer "+s.config.SupabaseServiceRoleKey)
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		appError.WriteErrorResponse(w, appError.New(appError.ErrDatabase, "Count request failed"), common.GenerateTraceID())
 		return
@@ -370,20 +399,47 @@ func (s *OrdersService) ListOrders(w http.ResponseWriter, r *http.Request) {
 	common.WriteSuccessResponseWithMeta(w, orders, meta, "Orders retrieved successfully")
 }
 
-// GetOrder handles GET /orders/{order_id} (admin)
+// GetOrder handles GET /orders/{order_id} (protected) - get specific order details
 func (s *OrdersService) GetOrder(w http.ResponseWriter, r *http.Request) {
+	userID, ok := common.GetUserIDFromContext(r)
+	if !ok {
+		appError.WriteErrorResponse(w, appError.New(appError.ErrUnauthorized, "Unauthorized"), common.GenerateTraceID())
+		return
+	}
+
 	vars := mux.Vars(r)
 	orderID := vars["order_id"]
 	if orderID == "" {
 		appError.WriteErrorResponse(w, appError.New(appError.ErrInvalidInput, "Invalid order ID"), common.GenerateTraceID())
 		return
 	}
+
+	// Validate UUID format
+	if _, err := uuid.Parse(orderID); err != nil {
+		appError.WriteErrorResponse(w, appError.New(appError.ErrInvalidInput, "Invalid order ID format"), common.GenerateTraceID())
+		return
+	}
+
 	orderURL := fmt.Sprintf("%s/rest/v1/orders?id=eq.%s&select=*", s.config.SupabaseURL, orderID)
 	ord, appErr := s.getSingle(orderURL)
 	if appErr != nil {
+		// Check if it's a "not found" error specifically
+		if appErr.Type == appError.ErrNotFound {
+			appError.WriteErrorResponse(w, appError.New(appError.ErrNotFound, "Order not found"), common.GenerateTraceID())
+			return
+		}
 		appError.WriteErrorResponse(w, appErr, common.GenerateTraceID())
 		return
 	}
+
+	// Check if user is buyer or seller
+	buyerID, _ := ord["buyer_id"].(string)
+	sellerID, _ := ord["seller_id"].(string)
+	if userID != buyerID && userID != sellerID {
+		appError.WriteErrorResponse(w, appError.New(appError.ErrForbidden, "You can only view your own orders"), common.GenerateTraceID())
+		return
+	}
+
 	paymentURL := fmt.Sprintf("%s/rest/v1/payments?order_id=eq.%s&select=*&order=created_at.desc", s.config.SupabaseURL, orderID)
 	pmts, appErr := s.getMultiple(paymentURL)
 	if appErr != nil {
@@ -419,8 +475,11 @@ func (s *OrdersService) getSingle(url string) (map[string]interface{}, *appError
 		return nil, appError.New(appError.ErrDatabase, "Database query failed")
 	}
 	var arr []map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&arr); err != nil || len(arr) == 0 {
+	if err := json.NewDecoder(resp.Body).Decode(&arr); err != nil {
 		return nil, appError.New(appError.ErrInternal, "Failed to parse database response")
+	}
+	if len(arr) == 0 {
+		return nil, appError.New(appError.ErrNotFound, "Record not found")
 	}
 	return arr[0], nil
 }
@@ -627,4 +686,261 @@ func (s *OrdersService) ExpireOrders(w http.ResponseWriter, r *http.Request) {
 	common.WriteSuccessResponse(w, map[string]interface{}{
 		"expired_count": expiredCount,
 	}, "Orders expiration completed")
+}
+
+// GetMyOrders handles GET /orders/my (protected) - get current user's orders (USER ROLE ONLY)
+func (s *OrdersService) GetMyOrders(w http.ResponseWriter, r *http.Request) {
+	userID, ok := common.GetUserIDFromContext(r)
+	if !ok {
+		appError.WriteErrorResponse(w, appError.New(appError.ErrUnauthorized, "Unauthorized"), common.GenerateTraceID())
+		return
+	}
+
+	// Check if user has 'user' role
+	userURL := fmt.Sprintf("%s/rest/v1/users?id=eq.%s&select=role", s.config.SupabaseURL, userID)
+	userInfo, appErr := s.getSingle(userURL)
+	if appErr != nil {
+		appError.WriteErrorResponse(w, appError.New(appError.ErrNotFound, "User not found"), common.GenerateTraceID())
+		return
+	}
+
+	userRole, _ := userInfo["role"].(string)
+	if userRole != "user" {
+		appError.WriteErrorResponse(w, appError.New(appError.ErrForbidden, "This endpoint is only accessible by users"), common.GenerateTraceID())
+		return
+	}
+
+	// Build filters - show orders where this user is the buyer
+	q := url.Values{}
+	q.Set("select", "*")
+	q.Set("buyer_id", "eq."+userID)
+
+	status := r.URL.Query().Get("status")
+	orderType := r.URL.Query().Get("type")
+	pageStr := r.URL.Query().Get("page")
+	limitStr := r.URL.Query().Get("limit")
+
+	if status != "" {
+		q.Set("status", "eq."+status)
+	}
+	if orderType != "" {
+		q.Set("type", "eq."+orderType)
+	}
+
+	limit := 20
+	if v, err := strconv.Atoi(limitStr); err == nil && v > 0 {
+		limit = v
+	}
+	page := 1
+	if v, err := strconv.Atoi(pageStr); err == nil && v > 0 {
+		page = v
+	}
+	offset := (page - 1) * limit
+	q.Set("limit", strconv.Itoa(limit))
+	q.Set("offset", strconv.Itoa(offset))
+	q.Set("order", "created_at.desc")
+
+	listURL := fmt.Sprintf("%s/rest/v1/orders?%s", s.config.SupabaseURL, q.Encode())
+	orders, appErr := s.getMultiple(listURL)
+	if appErr != nil {
+		appError.WriteErrorResponse(w, appErr, common.GenerateTraceID())
+		return
+	}
+
+	// Total count
+	countURL := fmt.Sprintf("%s/rest/v1/orders?select=count&buyer_id=eq.%s", s.config.SupabaseURL, userID)
+	if status != "" || orderType != "" {
+		// reapply filters for count
+		cq := url.Values{}
+		cq.Set("select", "count")
+		cq.Set("buyer_id", "eq."+userID)
+		if status != "" {
+			cq.Set("status", "eq."+status)
+		}
+		if orderType != "" {
+			cq.Set("type", "eq."+orderType)
+		}
+		countURL = fmt.Sprintf("%s/rest/v1/orders?%s", s.config.SupabaseURL, cq.Encode())
+	}
+	req, err := http.NewRequest(http.MethodGet, countURL, nil)
+	if err != nil {
+		appError.WriteErrorResponse(w, appError.New(appError.ErrInternal, "Failed to build count request"), common.GenerateTraceID())
+		return
+	}
+	req.Header.Set("apikey", s.config.SupabaseServiceRoleKey)
+	req.Header.Set("Authorization", "Bearer "+s.config.SupabaseServiceRoleKey)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		appError.WriteErrorResponse(w, appError.New(appError.ErrDatabase, "Count request failed"), common.GenerateTraceID())
+		return
+	}
+	defer resp.Body.Close()
+	var countArr []map[string]interface{}
+	_ = json.NewDecoder(resp.Body).Decode(&countArr)
+	total := len(orders)
+	if len(countArr) > 0 {
+		if c, ok := countArr[0]["count"].(float64); ok {
+			total = int(c)
+		}
+	}
+
+	meta := common.CalculateMeta(page, limit, total)
+	common.WriteSuccessResponseWithMeta(w, orders, meta, "My orders retrieved successfully")
+}
+
+// GetPartnerOrders handles GET /orders/partner (protected) - get orders for partner's items (PARTNER ROLE ONLY)
+func (s *OrdersService) GetPartnerOrders(w http.ResponseWriter, r *http.Request) {
+	userID, ok := common.GetUserIDFromContext(r)
+	if !ok {
+		appError.WriteErrorResponse(w, appError.New(appError.ErrUnauthorized, "Unauthorized"), common.GenerateTraceID())
+		return
+	}
+
+	// Check if user has 'partner' role
+	userURL := fmt.Sprintf("%s/rest/v1/users?id=eq.%s&select=role", s.config.SupabaseURL, userID)
+	userInfo, appErr := s.getSingle(userURL)
+	if appErr != nil {
+		appError.WriteErrorResponse(w, appError.New(appError.ErrNotFound, "User not found"), common.GenerateTraceID())
+		return
+	}
+
+	userRole, _ := userInfo["role"].(string)
+	if userRole != "partner" {
+		appError.WriteErrorResponse(w, appError.New(appError.ErrForbidden, "This endpoint is only accessible by partners"), common.GenerateTraceID())
+		return
+	}
+
+	// Build filters - show orders where this partner is the seller (orders for their items)
+	q := url.Values{}
+	q.Set("select", "*")
+	q.Set("seller_id", "eq."+userID)
+
+	status := r.URL.Query().Get("status")
+	orderType := r.URL.Query().Get("type")
+	pageStr := r.URL.Query().Get("page")
+	limitStr := r.URL.Query().Get("limit")
+
+	if status != "" {
+		q.Set("status", "eq."+status)
+	}
+	if orderType != "" {
+		q.Set("type", "eq."+orderType)
+	}
+
+	limit := 20
+	if v, err := strconv.Atoi(limitStr); err == nil && v > 0 {
+		limit = v
+	}
+	page := 1
+	if v, err := strconv.Atoi(pageStr); err == nil && v > 0 {
+		page = v
+	}
+	offset := (page - 1) * limit
+	q.Set("limit", strconv.Itoa(limit))
+	q.Set("offset", strconv.Itoa(offset))
+	q.Set("order", "created_at.desc")
+
+	listURL := fmt.Sprintf("%s/rest/v1/orders?%s", s.config.SupabaseURL, q.Encode())
+	orders, appErr := s.getMultiple(listURL)
+	if appErr != nil {
+		appError.WriteErrorResponse(w, appErr, common.GenerateTraceID())
+		return
+	}
+
+	// Total count
+	countURL := fmt.Sprintf("%s/rest/v1/orders?select=count&seller_id=eq.%s", s.config.SupabaseURL, userID)
+	if status != "" || orderType != "" {
+		// reapply filters for count
+		cq := url.Values{}
+		cq.Set("select", "count")
+		cq.Set("seller_id", "eq."+userID)
+		if status != "" {
+			cq.Set("status", "eq."+status)
+		}
+		if orderType != "" {
+			cq.Set("type", "eq."+orderType)
+		}
+		countURL = fmt.Sprintf("%s/rest/v1/orders?%s", s.config.SupabaseURL, cq.Encode())
+	}
+	req, err := http.NewRequest(http.MethodGet, countURL, nil)
+	if err != nil {
+		appError.WriteErrorResponse(w, appError.New(appError.ErrInternal, "Failed to build count request"), common.GenerateTraceID())
+		return
+	}
+	req.Header.Set("apikey", s.config.SupabaseServiceRoleKey)
+	req.Header.Set("Authorization", "Bearer "+s.config.SupabaseServiceRoleKey)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		appError.WriteErrorResponse(w, appError.New(appError.ErrDatabase, "Count request failed"), common.GenerateTraceID())
+		return
+	}
+	defer resp.Body.Close()
+	var countArr []map[string]interface{}
+	_ = json.NewDecoder(resp.Body).Decode(&countArr)
+	total := len(orders)
+	if len(countArr) > 0 {
+		if c, ok := countArr[0]["count"].(float64); ok {
+			total = int(c)
+		}
+	}
+
+	meta := common.CalculateMeta(page, limit, total)
+	common.WriteSuccessResponseWithMeta(w, orders, meta, "Partner orders retrieved successfully")
+}
+
+// DeleteOrder handles DELETE /orders/{order_id} (protected) - cancel order
+func (s *OrdersService) DeleteOrder(w http.ResponseWriter, r *http.Request) {
+	userID, ok := common.GetUserIDFromContext(r)
+	if !ok {
+		appError.WriteErrorResponse(w, appError.New(appError.ErrUnauthorized, "Unauthorized"), common.GenerateTraceID())
+		return
+	}
+
+	vars := mux.Vars(r)
+	orderID := vars["order_id"]
+	if orderID == "" {
+		appError.WriteErrorResponse(w, appError.New(appError.ErrInvalidInput, "Invalid order ID"), common.GenerateTraceID())
+		return
+	}
+
+	// Check if order exists and get current status
+	orderURL := fmt.Sprintf("%s/rest/v1/orders?id=eq.%s&select=id,status,buyer_id,seller_id", s.config.SupabaseURL, orderID)
+	orderInfo, appErr := s.getSingle(orderURL)
+	if appErr != nil {
+		appError.WriteErrorResponse(w, appError.New(appError.ErrNotFound, "Order not found"), common.GenerateTraceID())
+		return
+	}
+
+	currentStatus, _ := orderInfo["status"].(string)
+	buyerID, _ := orderInfo["buyer_id"].(string)
+	sellerID, _ := orderInfo["seller_id"].(string)
+
+	// Check if user is buyer or seller
+	if userID != buyerID && userID != sellerID {
+		appError.WriteErrorResponse(w, appError.New(appError.ErrForbidden, "You can only cancel your own orders"), common.GenerateTraceID())
+		return
+	}
+
+	// Only allow cancellation of pending or awaiting_payment orders
+	if currentStatus != models.OrderStatusPending && currentStatus != models.OrderStatusAwaitingPayment {
+		appError.WriteErrorResponse(w, appError.New(appError.ErrInvalidInput, "Order cannot be cancelled in current status"), common.GenerateTraceID())
+		return
+	}
+
+	// Update order status to cancelled
+	orderUpdate := map[string]interface{}{
+		"status": models.OrderStatusCancelled,
+	}
+	if err := s.updateRecord(orderURL, orderUpdate); err != nil {
+		appError.WriteErrorResponse(w, appError.New(appError.ErrDatabase, "Failed to cancel order"), common.GenerateTraceID())
+		return
+	}
+
+	response := map[string]interface{}{
+		"order_id": orderID,
+		"status":   models.OrderStatusCancelled,
+		"message":  "Order cancelled successfully",
+	}
+
+	common.WriteSuccessResponse(w, response, "Order cancelled successfully")
 }

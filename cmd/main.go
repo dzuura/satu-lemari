@@ -306,6 +306,11 @@ func (s *Server) registerRoutes(api *mux.Router) {
 	protectedRoutes.HandleFunc("/requests", s.requestService.CreateRequest).Methods("POST")
 	// Protected orders routes
 	protectedRoutes.HandleFunc("/orders", s.ordersService.CreateOrder).Methods("POST")
+	protectedRoutes.HandleFunc("/orders", s.ordersService.ListOrders).Methods("GET")
+	protectedRoutes.HandleFunc("/orders/my", s.ordersService.GetMyOrders).Methods("GET")
+	protectedRoutes.HandleFunc("/orders/partner", s.ordersService.GetPartnerOrders).Methods("GET")
+	protectedRoutes.HandleFunc("/orders/{order_id}", s.ordersService.GetOrder).Methods("GET")
+	protectedRoutes.HandleFunc("/orders/{order_id}", s.ordersService.DeleteOrder).Methods("DELETE")
 	protectedRoutes.HandleFunc("/requests/my", s.requestService.GetMyRequests).Methods("GET")
 	protectedRoutes.HandleFunc("/requests/partner", s.requestService.GetPartnerRequests).Methods("GET")
 	protectedRoutes.HandleFunc("/requests/{request_id}", s.requestService.GetRequestByID).Methods("GET")
